@@ -428,6 +428,15 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
+    /// Replace host-owned declarations at an idle boundary. Omission preserves
+    /// the latest applied list; an empty list explicitly clears it.
+    #[experimental("thread/resume.dynamicTools")]
+    #[serde(
+        default,
+        deserialize_with = "codex_protocol::dynamic_tools::deserialize_dynamic_tool_specs"
+    )]
+    #[ts(optional = nullable)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -473,6 +482,11 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.initialTurnsPage")]
     #[serde(default)]
     pub initial_turns_page: Option<TurnsPage>,
+    /// SHA-256 digest of the canonical JSON encoding of the effective dynamic
+    /// tool declaration list. An empty list is represented by `[]`.
+    #[experimental("thread/resume.dynamicToolsDigest")]
+    #[serde(default)]
+    pub dynamic_tools_digest: String,
     /// Opaque cursor for hydrating paginated turns backwards.
     ///
     /// Pass this as `cursor` to `thread/turns/list` with

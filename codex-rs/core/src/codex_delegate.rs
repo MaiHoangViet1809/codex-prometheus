@@ -145,7 +145,7 @@ pub(crate) async fn run_codex_thread_interactive(
             control: Arc::clone(&parent_session.services.agent_control),
             runtime,
         },
-        dynamic_tools: Vec::new(),
+        dynamic_tools: None,
         metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),

@@ -43,6 +43,8 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
+use sha2::Digest;
+use sha2::Sha256;
 use std::ops::ControlFlow;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -124,8 +126,16 @@ fn collect_resume_override_mismatches(
     request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
     selected_service_tier: Option<&str>,
+    effective_dynamic_tools: &[DynamicToolSpec],
 ) -> Vec<String> {
     let mut mismatch_details = Vec::new();
+    if request
+        .dynamic_tools
+        .as_ref()
+        .is_some_and(|tools| tools != effective_dynamic_tools)
+    {
+        mismatch_details.push("dynamic tool declarations differ".to_owned());
+    }
 
     if let Some(requested_model) = request.model.as_deref()
         && requested_model != config_snapshot.model
@@ -477,6 +487,51 @@ fn validate_dynamic_tools(tools: &[DynamicToolSpec]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn canonicalize_dynamic_tools_json(value: &serde_json::Value) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    write_canonical_json(value, &mut bytes);
+    bytes
+}
+
+fn write_canonical_json(value: &serde_json::Value, out: &mut Vec<u8>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            fields.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+            out.push(b'{');
+            for (index, (key, value)) in fields.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                serde_json::to_writer(&mut *out, key).expect("JSON object keys are encodable");
+                out.push(b':');
+                write_canonical_json(value, &mut *out);
+            }
+            out.push(b'}');
+        }
+        serde_json::Value::Array(values) => {
+            out.push(b'[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(b',');
+                }
+                write_canonical_json(value, &mut *out);
+            }
+            out.push(b']');
+        }
+        value => serde_json::to_writer(&mut *out, value).expect("JSON value is encodable"),
+    }
+}
+
+pub(super) fn dynamic_tools_digest(tools: &[DynamicToolSpec]) -> Result<String, JSONRPCErrorError> {
+    let value = serde_json::to_value(tools)
+        .map_err(|err| internal_error(format!("failed to encode dynamic tool digest: {err}")))?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(canonicalize_dynamic_tools_json(&value))
+    ))
 }
 
 #[derive(Clone)]
@@ -1586,7 +1641,7 @@ impl ThreadRequestProcessor {
                 },
                 history_mode,
                 thread_source,
-                dynamic_tools,
+                dynamic_tools: Some(dynamic_tools),
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments: Some(environment_requests),
@@ -3959,6 +4014,9 @@ impl ThreadRequestProcessor {
         client_mcp_extensions: ClientMcpExtensions,
         prepared_config: &mut Option<PreparedResumeConfig>,
     ) -> Result<ControlFlow<()>, JSONRPCErrorError> {
+        if let Some(tools) = params.dynamic_tools.as_ref() {
+            validate_dynamic_tools(tools).map_err(invalid_request)?;
+        }
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
                 .pending_thread_unloads
@@ -4031,6 +4089,7 @@ impl ThreadRequestProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            dynamic_tools,
             exclude_turns,
             initial_turns_page,
         } = params.clone();
@@ -4336,6 +4395,7 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::DaemonRecovery(_) => None,
                 },
                 client_mcp_extensions,
+                dynamic_tools,
                 ..StartThreadOptions::new(config)
             })
             .await
@@ -4545,6 +4605,13 @@ impl ThreadRequestProcessor {
                     initial_turns_page,
                     turns_backwards_cursor,
                     items_backwards_cursor,
+                    dynamic_tools_digest: dynamic_tools_digest(
+                        &codex_thread
+                            .thread_settings_snapshot()
+                            .await
+                            .dynamic_tools
+                            .unwrap_or_default(),
+                    )?,
                 };
 
                 let connection_id = request_id.connection_id;
@@ -4691,11 +4758,30 @@ impl ThreadRequestProcessor {
             }
             let (config_snapshot, selected_service_tier) =
                 existing_thread.resume_config_snapshot().await;
+            let effective_tools = existing_thread
+                .thread_settings_snapshot()
+                .await
+                .dynamic_tools
+                .unwrap_or_default();
             let mismatch_details = collect_resume_override_mismatches(
                 params,
                 &config_snapshot,
                 selected_service_tier.as_deref(),
+                &effective_tools,
             );
+            if params.dynamic_tools.is_some()
+                && (matches!(existing_thread.agent_status().await, AgentStatus::Running)
+                    || matches!(
+                        self.thread_watch_manager
+                            .loaded_status_for_thread(&existing_thread_id.to_string())
+                            .await,
+                        ThreadStatus::Active { .. }
+                    ))
+            {
+                return Err(invalid_request(
+                    "dynamic tools can only be resumed on an idle thread",
+                ));
+            }
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
                     .thread_state_manager
@@ -4739,6 +4825,15 @@ impl ThreadRequestProcessor {
 
                 // Preserve rejoin semantics when another client can still observe
                 // the loaded thread or shutdown did not complete.
+                if params
+                    .dynamic_tools
+                    .as_ref()
+                    .is_some_and(|tools| tools != &effective_tools)
+                {
+                    return Err(invalid_request(
+                        "dynamic tool update could not be applied to the loaded thread",
+                    ));
+                }
                 tracing::warn!(
                     "thread/resume overrides ignored for loaded thread {}: {}",
                     existing_thread_id,

@@ -2411,6 +2411,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                 ThreadSettingsAppliedEvent {
                     thread_id: Some(parent_thread_id),
                     thread_settings: ThreadSettingsSnapshot {
+                        dynamic_tools: None,
                         disabled_plugin_ids: Vec::new(),
                         model: "parent-only-model".to_string(),
                         model_provider_id: "parent-only-provider".to_string(),
@@ -2576,7 +2577,7 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         .start_thread(StartThreadOptions {
             history_mode: Some(ThreadHistoryMode::Paginated),
             environments: Some(Vec::new()),
-            dynamic_tools: dynamic_tools.clone(),
+            dynamic_tools: Some(dynamic_tools.clone()),
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await

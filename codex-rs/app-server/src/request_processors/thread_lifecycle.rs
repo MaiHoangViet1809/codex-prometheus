@@ -907,6 +907,19 @@ pub(super) async fn handle_pending_thread_resume_request(
         originator,
         ..
     } = config_snapshot;
+    let dynamic_tools_digest = match super::thread_processor::dynamic_tools_digest(
+        &conversation
+            .thread_settings_snapshot()
+            .await
+            .dynamic_tools
+            .unwrap_or_default(),
+    ) {
+        Ok(digest) => digest,
+        Err(error) => {
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+    };
     let instruction_sources = pending.instruction_sources;
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
@@ -932,6 +945,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         initial_turns_page,
         turns_backwards_cursor,
         items_backwards_cursor,
+        dynamic_tools_digest,
     };
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)

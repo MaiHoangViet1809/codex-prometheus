@@ -110,6 +110,14 @@ pub(super) async fn revert(
     )
     .await?;
 
+    // Resolve settings at the retained boundary, not at the source HEAD or
+    // original SessionMeta; otherwise an explicit clear can be resurrected.
+    let retained_context =
+        super::model_context::load_for_fork(lineage.clone(), history_base).await?;
+    if let Some(codex_rollout::RolloutItem::SessionMeta(meta)) = retained_context.first() {
+        source_meta.dynamic_tools = meta.meta.dynamic_tools.clone();
+    }
+
     let forked_from_ordinal_exclusive =
         codex_rollout::forked_from_ordinal_exclusive(&source_meta, Some(source_path.as_path()))
             .map(|cutoff| {

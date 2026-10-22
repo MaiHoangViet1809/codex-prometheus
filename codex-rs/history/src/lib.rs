@@ -446,17 +446,12 @@ impl InitialHistory {
     }
 
     pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
-        match self {
-            Self::New | Self::Cleared => None,
-            Self::Resumed(resumed) => resumed.history.iter().find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
-                _ => None,
-            }),
-            Self::Forked(items) => items.iter().find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
-                _ => None,
-            }),
-        }
+        let owner = match self {
+            Self::Resumed(resumed) => resumed.conversation_id,
+            Self::Forked(_) => self.get_session_meta()?.id,
+            Self::New | Self::Cleared => return None,
+        };
+        latest_dynamic_tools(self.get_rollout_items(), owner).map(<[DynamicToolSpec]>::to_vec)
     }
 
     pub fn get_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
@@ -564,6 +559,33 @@ pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) ->
             _ => None,
         })
         .and_then(|context| context.disabled_plugin_ids.as_deref())
+}
+
+/// Resolve only owner-matched applied declarations; Some([]) is an actual clear.
+/// Older snapshots omitting this field cannot resurrect obsolete SessionMeta tools.
+pub fn latest_dynamic_tools(
+    items: &[RolloutItem],
+    thread_id: ThreadId,
+) -> Option<&[DynamicToolSpec]> {
+    items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                if event.thread_id == Some(thread_id) =>
+            {
+                event.thread_settings.dynamic_tools.as_deref()
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta) if meta.meta.id == thread_id => {
+                    meta.meta.dynamic_tools.as_deref()
+                }
+                _ => None,
+            })
+        })
 }
 
 fn multi_agent_version_from_items(
