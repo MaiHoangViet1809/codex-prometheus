@@ -767,6 +767,7 @@ mod thread_processor_behavior_tests {
                 &request,
                 &config_snapshot,
                 /* selected_service_tier */ Some("flex"),
+                &[],
             ),
             vec!["service_tier requested=Some(\"priority\") active=Some(\"flex\")".to_string()]
         );

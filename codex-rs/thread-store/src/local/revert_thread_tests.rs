@@ -184,6 +184,95 @@ async fn revert_keeps_thread_id_and_hides_suffix_across_repeated_reverts() {
 }
 
 #[tokio::test]
+async fn revert_restores_tools_at_retained_boundary_not_source_head() {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("state database");
+    let store = LocalThreadStore::new(config, Some(state_db.clone()));
+    let thread_id = ThreadId::new();
+    create_paginated_thread(&store, thread_id).await;
+    let mut items = vec![turn_started("turn-1"), turn_completed("turn-1")];
+    for tools in [
+        serde_json::json!([]),
+        serde_json::json!([{
+            "type": "function", "name": "obsolete_after_revert", "description": "test",
+            "inputSchema": {"type": "object", "properties": {}}
+        }]),
+    ] {
+        let event = serde_json::from_value(serde_json::json!({
+            "thread_id": thread_id, "thread_settings": {
+                "model": "gpt-5", "model_provider_id": "openai", "approval_policy": "never",
+                "approvals_reviewer": "user", "cwd": home.path(),
+                "permission_profile": codex_protocol::models::PermissionProfile::read_only(),
+                "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5"}},
+                "dynamic_tools": tools
+            }
+        }))
+        .expect("settings");
+        items.push(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+            event,
+        )));
+        if items.len() == 3 {
+            items.extend([turn_started("turn-2"), turn_completed("turn-2")]);
+        }
+    }
+    store
+        .append_items(AppendThreadItemsParams { thread_id, items })
+        .await
+        .expect("append");
+    let path = store.live_rollout_path(thread_id).await.expect("path");
+    store.shutdown_thread(thread_id).await.expect("close");
+    codex_rollout::state_db::reconcile_rollout(
+        Some(state_db.as_ref()),
+        path.as_path(),
+        "test-provider",
+        None,
+        &[],
+        Some(false),
+        None,
+    )
+    .await;
+    store
+        .revert_thread(RevertThreadParams {
+            thread_id,
+            before_turn_id: "turn-2".to_string(),
+            multi_agent_version: None,
+        })
+        .await
+        .expect("revert");
+    let path = state_db
+        .get_thread(thread_id)
+        .await
+        .expect("metadata")
+        .expect("thread")
+        .rollout_path;
+    let meta = codex_rollout::read_session_meta_line(&path)
+        .await
+        .expect("replacement metadata");
+    assert_eq!(meta.meta.id, thread_id);
+    // The recorder's existing empty-metadata representation is None. The
+    // canonical resumed projection must still resolve the retained clear.
+    assert!(meta.meta.dynamic_tools.unwrap_or_default().is_empty());
+    let context = store
+        .load_latest_model_context(crate::LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("reverted model context");
+    let RolloutItem::SessionMeta(meta) = &context.items[0] else {
+        panic!("metadata")
+    };
+    assert_eq!(meta.meta.dynamic_tools, Some(Vec::new()));
+    assert_eq!(turn_ids(&store, thread_id).await, vec!["turn-1"]);
+}
+
+#[tokio::test]
 async fn revert_preserves_resolved_multi_agent_version_in_session_metadata() {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());

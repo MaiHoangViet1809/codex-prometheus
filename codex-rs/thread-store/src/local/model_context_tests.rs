@@ -90,6 +90,66 @@ async fn model_context_revision_invalidates_after_append_or_removal() {
 }
 
 #[tokio::test]
+async fn declarations_survive_compaction_and_respect_frozen_fork_boundary() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(1099);
+    let owner = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let selected = serde_json::json!([{"type": "function", "name": "inspect_dashboard",
+        "description": "inspect", "inputSchema": {"type": "object", "properties": {}}}]);
+    let applied = |thread_id: ThreadId, tools: serde_json::Value| {
+        let event = serde_json::from_value(serde_json::json!({
+            "thread_id": thread_id, "thread_settings": {
+                "model": "gpt-5", "model_provider_id": "openai", "approval_policy": "never",
+                "approvals_reviewer": "user", "cwd": home.path(),
+                "permission_profile": codex_protocol::models::PermissionProfile::read_only(),
+                "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5"}},
+                "dynamic_tools": tools
+            }
+        }))
+        .expect("settings event");
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+    };
+    let path = write_ordinaled_paginated_rollout(
+        home.path(),
+        "2025-01-03T13-00-59",
+        uuid,
+        [
+            applied(owner, selected.clone()),
+            applied(owner, serde_json::json!([])),
+            compacted("current window", Some(Vec::new())),
+            applied(ThreadId::new(), selected.clone()),
+        ],
+    );
+    let store = LocalThreadStore::new(test_config(home.path()), None);
+    let context = store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: owner,
+            include_archived: false,
+        })
+        .await
+        .expect("current context");
+    let RolloutItem::SessionMeta(meta) = &context.items[0] else {
+        panic!("metadata");
+    };
+    assert_eq!(meta.meta.dynamic_tools, Some(Vec::new()));
+    let boundary = history_position(&path, owner, 2);
+    let lineage = store
+        .resolve_rollout_lineage(owner, None)
+        .await
+        .expect("lineage");
+    let fork = load_for_fork(lineage, Some(boundary))
+        .await
+        .expect("frozen context");
+    let RolloutItem::SessionMeta(meta) = &fork[0] else {
+        panic!("metadata");
+    };
+    assert_eq!(
+        serde_json::to_value(&meta.meta.dynamic_tools).expect("tools"),
+        selected
+    );
+}
+
+#[tokio::test]
 async fn stops_at_newest_usable_compaction_and_keeps_companions() {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::from_u128(/*v*/ 1001);

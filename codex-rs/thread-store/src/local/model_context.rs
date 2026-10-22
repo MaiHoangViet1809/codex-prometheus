@@ -182,10 +182,12 @@ async fn scan_model_context_from_lineage(
 
 fn scan_model_context_from_lineage_blocking(
     lineage: &RolloutLineage,
-    session_meta: SessionMetaLine,
+    mut session_meta: SessionMetaLine,
     is_cancelled: impl Fn() -> bool,
 ) -> io::Result<Vec<RolloutItem>> {
     let mut scan = ModelContextScan::default();
+    let mut context_complete = false;
+    let mut applied_dynamic_tools = None;
     'segments: for segment in lineage.segments().iter().rev() {
         let file = codex_rollout::open_rollout_seekable_reader(
             segment.rollout_path.as_path(),
@@ -204,14 +206,30 @@ fn scan_model_context_from_lineage_blocking(
             if matches!(&line.item, RolloutItem::SessionMeta(_)) {
                 break;
             }
-            match scan.push(line.item) {
-                ModelContextScanProgress::Continue => {}
-                ModelContextScanProgress::Complete => break 'segments,
+            if applied_dynamic_tools.is_none()
+                && let RolloutItem::EventMsg(
+                    codex_protocol::protocol::EventMsg::ThreadSettingsApplied(event),
+                ) = &line.item
+                && event.thread_id == Some(session_meta.meta.id)
+            {
+                applied_dynamic_tools = event.thread_settings.dynamic_tools.clone();
+            }
+            if !context_complete {
+                context_complete =
+                    matches!(scan.push(line.item), ModelContextScanProgress::Complete);
+            }
+            // Compaction bounds model context, not declaration ownership. Keep
+            // scanning only until the latest owned tools checkpoint is resolved.
+            if context_complete && applied_dynamic_tools.is_some() {
+                break 'segments;
             }
         }
     }
 
     let mut items = scan.finish();
+    if let Some(tools) = applied_dynamic_tools {
+        session_meta.meta.dynamic_tools = Some(tools);
+    }
     items.insert(0, RolloutItem::SessionMeta(Box::new(session_meta)));
     Ok(items)
 }

@@ -48,6 +48,281 @@ const INVALID_AUDIO_URL_ERROR: &str = "audio URLs must use an inline data URL";
 const REMOTE_IMAGE_URL_ERROR: &str =
     "remote image URLs are not supported; use an inline data URL instead";
 
+#[tokio::test]
+async fn cold_resume_dynamic_tools_replace_clear_and_preserve_thread() -> Result<()> {
+    let mut responses = vec![
+        create_final_assistant_message_sse_response("Done")?,
+        responses::sse(vec![
+            responses::ev_response_created("resume-tool-response"),
+            json!({"type": "response.output_item.done", "item": {
+                "type": "function_call", "call_id": "resume-call", "name": "inspect_dashboard", "arguments": "{}"
+            }}),
+            responses::ev_completed("resume-tool-response"),
+        ]),
+    ];
+    for _ in 0..4 {
+        responses.push(create_final_assistant_message_sse_response("Done")?);
+    }
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request = client
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let started: ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, client.read_response(request)).await??;
+    let rollout_path = started.thread.path.context("persisted thread path")?;
+    let thread_id = started.thread.id;
+    let request = client
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Create persisted context".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, client.read_response(request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, client.shutdown_gracefully()).await??;
+    let declaration = |name| {
+        json!({"type": "function", "name": name,
+        "description": "Dashboard test declaration", "inputSchema": {
+            "type": "object", "properties": {}, "additionalProperties": false}})
+    };
+    for (tools, expected) in [
+        (
+            Some(vec![declaration("inspect_dashboard")]),
+            Some("inspect_dashboard"),
+        ),
+        (
+            Some(vec![declaration("edit_dashboard")]),
+            Some("edit_dashboard"),
+        ),
+        (Some(Vec::new()), None),
+        (None, None),
+    ] {
+        let mut client = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .without_auto_env()
+            .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+            .await?;
+        if expected == Some("inspect_dashboard") {
+            for invalid in [
+                vec![declaration("duplicate"), declaration("duplicate")],
+                vec![json!({"type": "function", "name": "bad_schema",
+                    "description": "invalid", "inputSchema": {"type": "null"}})],
+            ] {
+                let request = client
+                    .send_raw_request(
+                        "thread/resume",
+                        Some(json!({
+                            "threadId": thread_id, "dynamicTools": invalid, "excludeTurns": true
+                        })),
+                    )
+                    .await?;
+                let error = timeout(
+                    DEFAULT_READ_TIMEOUT,
+                    client.read_stream_until_error_message(RequestId::Integer(request)),
+                )
+                .await??;
+                assert_eq!(error.error.code, -32600);
+            }
+            #[cfg(unix)]
+            {
+                // A real storage failure must reject resume before inference,
+                // without changing the last durable declarations.
+                let before = std::fs::read(&rollout_path)?;
+                let original = std::fs::metadata(&rollout_path)?.permissions();
+                let mut readonly = original.clone();
+                readonly.set_readonly(true);
+                std::fs::set_permissions(&rollout_path, readonly)?;
+                let failed = async {
+                    let request = client.send_raw_request("thread/resume", Some(json!({
+                        "threadId": thread_id, "dynamicTools": [declaration("unpersistable")],
+                        "excludeTurns": true
+                    }))).await?;
+                    timeout(
+                        DEFAULT_READ_TIMEOUT,
+                        client.read_stream_until_error_message(RequestId::Integer(request)),
+                    )
+                    .await?
+                }
+                .await;
+                std::fs::set_permissions(&rollout_path, original)?;
+                let _error = failed?;
+                assert_eq!(std::fs::read(&rollout_path)?, before);
+            }
+        }
+        let mut params = json!({"threadId": thread_id, "excludeTurns": true});
+        if let Some(tools) = tools {
+            params["dynamicTools"] = json!(tools);
+        }
+        let request = client
+            .send_raw_request("thread/resume", Some(params))
+            .await?;
+        // Requests are admitted together, but the native per-thread queue must
+        // apply resume before capturing the following turn's declarations.
+        let queued_turn = if expected == Some("edit_dashboard") {
+            Some(
+                client
+                    .send_turn_start_request(TurnStartParams {
+                        thread_id: thread_id.clone(),
+                        input: vec![V2UserInput::Text {
+                            text: "Reply Done".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        ..Default::default()
+                    })
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let response = timeout(
+            DEFAULT_READ_TIMEOUT,
+            client.read_stream_until_response_message(RequestId::Integer(request)),
+        )
+        .await??;
+        let resumed: codex_app_server_protocol::ThreadResumeResponse = to_response(response)?;
+        assert_eq!(resumed.thread.id, thread_id);
+        assert_eq!(resumed.dynamic_tools_digest.len(), 64);
+        if expected == Some("inspect_dashboard") {
+            // Cross-language fixture computed with the host's sorted-key UTF-8
+            // JSON digest, not with this native implementation.
+            assert_eq!(
+                resumed.dynamic_tools_digest,
+                "694ca9b27d34ed300fe3551d2154ad80fa7bc8458bb9e379f69d437544612c02"
+            );
+            let declaration_records = || -> Result<usize> {
+                Ok(std::fs::read_to_string(&rollout_path)?
+                    .lines()
+                    .filter(|line| line.contains("thread_settings_applied"))
+                    .count())
+            };
+            let records_before = declaration_records()?;
+            // Identical declarations remain applicable while subscribed; a
+            // different set must not silently ACK an ignored loaded override.
+            let request = client
+                .send_raw_request(
+                    "thread/resume",
+                    Some(json!({
+                        "threadId": thread_id, "dynamicTools": [declaration("inspect_dashboard")],
+                        "excludeTurns": true
+                    })),
+                )
+                .await?;
+            let response = timeout(
+                DEFAULT_READ_TIMEOUT,
+                client.read_stream_until_response_message(RequestId::Integer(request)),
+            )
+            .await??;
+            let unchanged: codex_app_server_protocol::ThreadResumeResponse = to_response(response)?;
+            assert_eq!(unchanged.dynamic_tools_digest, resumed.dynamic_tools_digest);
+            let request = client
+                .send_raw_request(
+                    "thread/resume",
+                    Some(json!({
+                        "threadId": thread_id, "dynamicTools": [], "excludeTurns": true
+                    })),
+                )
+                .await?;
+            let error = timeout(
+                DEFAULT_READ_TIMEOUT,
+                client.read_stream_until_error_message(RequestId::Integer(request)),
+            )
+            .await??;
+            assert_eq!(error.error.code, -32600);
+            assert_eq!(declaration_records()?, records_before);
+        }
+        if expected.is_none() {
+            assert_eq!(
+                resumed.dynamic_tools_digest,
+                "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+            );
+        }
+        let request = if let Some(request) = queued_turn {
+            request
+        } else {
+            client
+                .send_turn_start_request(TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    input: vec![V2UserInput::Text {
+                        text: "Reply Done".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                })
+                .await?
+        };
+        let started_turn: TurnStartResponse =
+            timeout(DEFAULT_READ_TIMEOUT, client.read_response(request)).await??;
+        if expected == Some("inspect_dashboard") {
+            let request = timeout(
+                DEFAULT_READ_TIMEOUT,
+                client.read_stream_until_request_message(),
+            )
+            .await??;
+            let ServerRequest::DynamicToolCall { request_id, params } = request else {
+                anyhow::bail!("expected resumed dynamic tool dispatch");
+            };
+            assert_eq!(params.thread_id, thread_id);
+            assert_eq!(params.turn_id, started_turn.turn.id);
+            assert_eq!(params.tool, "inspect_dashboard");
+            assert_eq!(params.arguments, json!({}));
+            // A pending dynamic call is not an idle update boundary.
+            let busy = client
+                .send_raw_request(
+                    "thread/resume",
+                    Some(json!({
+                        "threadId": thread_id, "dynamicTools": [], "excludeTurns": true
+                    })),
+                )
+                .await?;
+            let error = timeout(
+                DEFAULT_READ_TIMEOUT,
+                client.read_stream_until_error_message(RequestId::Integer(busy)),
+            )
+            .await??;
+            assert_eq!(error.error.code, -32600);
+            client
+                .send_response(
+                    request_id,
+                    serde_json::to_value(DynamicToolCallResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: "resumed-ok".to_string(),
+                        }],
+                        success: true,
+                    })?,
+                )
+                .await?;
+        }
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            client.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+        let bodies = responses_bodies(&server).await?;
+        let body = bodies.last().context("provider request")?;
+        for name in ["inspect_dashboard", "edit_dashboard"] {
+            assert_eq!(find_tool(body, name).is_some(), expected == Some(name));
+        }
+        timeout(DEFAULT_READ_TIMEOUT, client.shutdown_gracefully()).await??;
+    }
+    Ok(())
+}
+
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
 #[cfg(any(target_os = "macos", windows))]

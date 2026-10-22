@@ -28,6 +28,43 @@ fn thread_settings_snapshot(disabled_plugin_ids: Vec<String>) -> Result<ThreadSe
 }
 
 #[test]
+fn latest_dynamic_tools_preserves_updates_clear_and_owner_boundary() -> Result<()> {
+    let owner = ThreadId::new();
+    let foreign = ThreadId::new();
+    let tool: DynamicToolSpec = serde_json::from_value(json!({
+        "type": "function", "name": "inspect_dashboard", "description": "Inspect the captured dashboard",
+        "inputSchema": {"type": "object", "properties": {}}
+    }))?;
+    let applied = |thread_id, tools| -> Result<RolloutItem> {
+        let mut settings = thread_settings_snapshot(Vec::new())?;
+        settings.dynamic_tools = tools;
+        Ok(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+            codex_protocol::protocol::ThreadSettingsAppliedEvent {
+                thread_id: Some(thread_id),
+                thread_settings: settings,
+            },
+        )))
+    };
+    let mut history = vec![applied(owner, Some(vec![tool.clone()]))?];
+    assert_eq!(
+        latest_dynamic_tools(&history, owner),
+        Some([tool.clone()].as_slice())
+    );
+    // Unrelated owners and older clients omitting declarations cannot overwrite them.
+    history.push(applied(foreign, Some(Vec::new()))?);
+    history.push(applied(owner, None)?);
+    assert_eq!(
+        latest_dynamic_tools(&history, owner),
+        Some([tool.clone()].as_slice())
+    );
+    history.push(applied(owner, Some(Vec::new()))?);
+    history.push(applied(foreign, Some(vec![tool]))?);
+    assert_eq!(latest_dynamic_tools(&history, owner), Some([].as_slice()));
+    assert_eq!(latest_dynamic_tools(&history, ThreadId::new()), None);
+    Ok(())
+}
+
+#[test]
 fn latest_disabled_plugin_ids_preserves_owned_updates_and_clears() -> Result<()> {
     let thread_id = ThreadId::new();
     let ancestor_id = ThreadId::new();

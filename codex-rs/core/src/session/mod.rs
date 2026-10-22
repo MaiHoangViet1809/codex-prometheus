@@ -512,7 +512,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) originator: String,
     pub(crate) agent_control: AgentControlInit,
-    pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) dynamic_tools: Option<Vec<DynamicToolSpec>>,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -845,12 +845,13 @@ impl Session {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| render_model_instructions(&model_info));
 
-        // Dynamic tools are defined at thread start and persisted in rollout session metadata.
-        let dynamic_tools = if dynamic_tools.is_empty() {
-            conversation_history.get_dynamic_tools().unwrap_or_default()
-        } else {
-            dynamic_tools
-        };
+        // Explicit declarations, including an empty list, replace startup metadata.
+        // Omission restores the latest native-owned applied declarations.
+        let restored_dynamic_tools = conversation_history.get_dynamic_tools().unwrap_or_default();
+        let declarations_changed = dynamic_tools
+            .as_ref()
+            .is_some_and(|tools| tools != &restored_dynamic_tools);
+        let dynamic_tools = dynamic_tools.unwrap_or(restored_dynamic_tools);
         let disabled_plugin_ids = disabled_plugin_ids.unwrap_or_else(|| {
             let settings_owner = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
@@ -1020,6 +1021,15 @@ impl Session {
                 Err(error) => map_session_init_error(&error, &config.codex_home),
             }
         })?;
+        // Persist through the existing native settings checkpoint before exposing
+        // success. A later omitted cold resume must not restore obsolete tools.
+        if declarations_changed {
+            session.checkpoint_thread_settings().await.map_err(|err| {
+                CodexErr::InvalidRequest(format!(
+                    "failed to persist dynamic tool declarations: {err}"
+                ))
+            })?;
+        }
         if let Some(message) = initial_service_tier_warning {
             session
                 .send_event_raw(Event {

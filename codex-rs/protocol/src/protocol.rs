@@ -2447,6 +2447,12 @@ pub struct ThreadSettingsSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    /// Latest host-owned dynamic tool declarations applied to this thread.
+    /// `Some([])` is an explicit clear. Absent means no applied update exists;
+    /// consumers may then fall back to the original SessionMeta declarations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffortConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]

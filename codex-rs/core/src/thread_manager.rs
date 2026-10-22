@@ -309,7 +309,7 @@ pub struct StartThreadOptions {
     pub thread_source: Option<ThreadSource>,
     /// Creation metadata forwarded to storage; never inherited from a fork source.
     pub attached_thread: bool,
-    pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    pub dynamic_tools: Option<Vec<codex_protocol::dynamic_tools::DynamicToolSpec>>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Option<Vec<TurnEnvironmentRequest>>,
@@ -341,7 +341,7 @@ impl StartThreadOptions {
             session_source: None,
             thread_source: None,
             attached_thread: false,
-            dynamic_tools: Vec::new(),
+            dynamic_tools: None,
             metrics_service_name: None,
             parent_trace: None,
             environments: None,
@@ -1546,6 +1546,7 @@ impl ThreadManager {
                 inherited_environments: Some(environments),
                 client_mcp_extensions: parent.client_mcp_extensions(),
                 disabled_plugin_ids: Some(settings.disabled_plugin_ids),
+                dynamic_tools: Some(parent.session.dynamic_tools().await),
                 thread_extension_init,
                 turn_extension_init: settings.turn_extension_init,
                 ..StartThreadOptions::new(config)

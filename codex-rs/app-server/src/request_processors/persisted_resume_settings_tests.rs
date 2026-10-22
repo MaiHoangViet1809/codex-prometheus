@@ -32,6 +32,7 @@ fn settings_item(
         ThreadSettingsAppliedEvent {
             thread_id,
             thread_settings: ThreadSettingsSnapshot {
+                dynamic_tools: None,
                 disabled_plugin_ids: Vec::new(),
                 model: "gpt-5".to_string(),
                 model_provider_id: "openai".to_string(),
