@@ -329,12 +329,12 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         .thread_manager
         .start_thread(StartThreadOptions {
             history_mode: Some(ThreadHistoryMode::Legacy),
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "diagnostics".to_string(),
                 description: "Returns diagnostic text and a screenshot.".to_string(),
                 input_schema: json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;

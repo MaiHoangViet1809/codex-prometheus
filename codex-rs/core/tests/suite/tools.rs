@@ -131,7 +131,7 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(
     } = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools,
+            dynamic_tools: Some(dynamic_tools),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;

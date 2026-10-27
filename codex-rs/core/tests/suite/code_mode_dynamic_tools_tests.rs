@@ -20,7 +20,7 @@ async fn code_mode_dynamic_tool_calls_pending_together_resolve_in_reverse_order(
     let new_thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "lookup".to_string(),
                 description: "Look up a value by key.".to_string(),
                 input_schema: serde_json::json!({
@@ -30,7 +30,7 @@ async fn code_mode_dynamic_tool_calls_pending_together_resolve_in_reverse_order(
                     "additionalProperties": false,
                 }),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;

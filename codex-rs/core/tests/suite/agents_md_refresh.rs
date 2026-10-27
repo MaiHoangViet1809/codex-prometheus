@@ -102,7 +102,7 @@ async fn concurrent_preparation_preserves_warnings_and_errors(
         .thread_manager
         .start_thread(StartThreadOptions {
             environments: Some(vec![test.executor_environment().request()]),
-            dynamic_tools,
+            dynamic_tools: Some(dynamic_tools),
             thread_instructions_provider: Some(observer.clone()),
             ..StartThreadOptions::new(test.config.clone())
         })

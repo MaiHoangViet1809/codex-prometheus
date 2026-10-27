@@ -94,7 +94,7 @@ async fn sampling_records_tool_registrations_once_across_stream_retry() -> Resul
         "additionalProperties": false,
     });
     let mut options = StartThreadOptions {
-        dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        dynamic_tools: Some(vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
             name: "workspace_tools".to_string(),
             description: "Tools for this workspace.".to_string(),
             tools: [("status", false), ("search", true)]
@@ -108,7 +108,7 @@ async fn sampling_records_tool_registrations_once_across_stream_retry() -> Resul
                     })
                 })
                 .collect(),
-        })],
+        })]),
         ..StartThreadOptions::new(test.config.clone())
     };
     options.thread_extension_init.insert(metrics.clone());

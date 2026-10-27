@@ -59,7 +59,7 @@ async fn descriptions_share_space_without_hiding_late_namespaces() -> Result<()>
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools,
+            dynamic_tools: Some(dynamic_tools),
             environments: Some(vec![test.executor_environment().request()]),
             ..StartThreadOptions::new(test.config.clone())
         })

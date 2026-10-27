@@ -144,12 +144,12 @@ async fn steer_joins_existing_turn_without_extending_sampling(
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "gate".to_string(),
                 description: "Wait for the host.".to_string(),
                 input_schema: serde_json::json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?;
