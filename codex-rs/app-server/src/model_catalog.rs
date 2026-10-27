@@ -199,6 +199,12 @@ mod tests {
         }
         std::fs::remove_file(&path)?;
         assert!(Arc::ptr_eq(&original.1, &catalog.current().await?.1));
+        std::fs::write(&path, serde_json::to_vec(&first)?)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)?
+            .set_times(std::fs::FileTimes::new().set_modified(original_metadata.modified()?))?;
+        assert!(Arc::ptr_eq(&original.1, &catalog.current().await?.1));
 
         let mut second = first.clone();
         second.models[0].slug = "other".into(); // same length; metadata is not a generation
@@ -212,6 +218,10 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&replacement)?.len(),
             original_metadata.len()
+        );
+        assert_eq!(
+            std::fs::metadata(&replacement)?.modified()?,
+            std::fs::metadata(&path)?.modified()?
         );
         std::fs::rename(&replacement, &path)?;
         let (left, right) = tokio::join!(catalog.current(), catalog.current());
