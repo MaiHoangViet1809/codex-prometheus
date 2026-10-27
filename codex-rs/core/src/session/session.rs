@@ -338,7 +338,7 @@ impl SessionConfiguration {
             personality: self.step_settings.personality,
             collaboration_mode: self.step_settings.collaboration_mode.clone(),
             disabled_plugin_ids: self.disabled_plugin_ids.clone(),
-            dynamic_tools: Some(self.dynamic_tools.clone()),
+            dynamic_tools: Some(self.dynamic_tools.to_vec()),
         }
     }
 
