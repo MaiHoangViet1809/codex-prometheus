@@ -727,6 +727,7 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
+            dynamic_tools: None,
         };
         let config_snapshot = ThreadConfigSnapshot {
             turn_extension_init: Default::default(),
