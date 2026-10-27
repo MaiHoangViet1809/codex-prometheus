@@ -205,7 +205,9 @@ mod tests {
         second.models[0].visibility = ModelVisibility::Hide;
         let replacement = home.path().join("replacement.json");
         std::fs::write(&replacement, serde_json::to_vec(&second)?)?;
-        std::fs::File::open(&replacement)?
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)?
             .set_times(std::fs::FileTimes::new().set_modified(original_metadata.modified()?))?;
         assert_eq!(
             std::fs::metadata(&replacement)?.len(),
