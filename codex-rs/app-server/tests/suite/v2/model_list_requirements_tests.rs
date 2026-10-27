@@ -212,9 +212,9 @@ requires_openai_auth = true
     Ok(())
 }
 
-/// Warm lists reuse their configuration; a completed login reloads the catalog once.
+/// Warm lists reread a custom catalog without reloading unrelated configuration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_list_reuses_catalog_until_account_change() -> Result<()> {
+async fn model_list_reloads_custom_catalog_without_account_change() -> Result<()> {
     let home = TempDir::new()?;
     let catalog_path = home.path().join("catalog.json");
     std::fs::write(&catalog_path, serde_json::to_vec(&catalog("first-model")?)?)?;
@@ -239,15 +239,13 @@ async fn model_list_reuses_catalog_until_account_change() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["first-model"]
     );
-    // A full config reload would try to parse this invalid catalog.
+    // A partially written catalog must not replace the last valid generation.
     std::fs::write(&catalog_path, "not JSON")?;
     assert_eq!(list_models(&mut server).await?, initial);
     std::fs::write(
         &catalog_path,
         serde_json::to_vec(&catalog("second-model")?)?,
     )?;
-    assert_eq!(list_models(&mut server).await?, initial);
-    sign_in(&mut server).await?;
     let changed = list_models(&mut server).await?;
     assert_eq!(
         changed
@@ -257,6 +255,9 @@ async fn model_list_reuses_catalog_until_account_change() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["second-model"]
     );
+    // Account invalidation must still work after an in-process file refresh.
+    sign_in(&mut server).await?;
+    assert_eq!(list_models(&mut server).await?, changed);
     std::fs::write(
         &catalog_path,
         serde_json::to_vec(&catalog("logged-out-model")?)?,
