@@ -45,7 +45,7 @@ async fn idle_eviction_preserves_worker_context_for_followup() -> Result<()> {
     let root = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "client_echo".to_string(),
                 description: "Echo the supplied message through the client.".to_string(),
                 input_schema: json!({
@@ -53,7 +53,7 @@ async fn idle_eviction_preserves_worker_context_for_followup() -> Result<()> {
                     "required": ["message"], "additionalProperties": false,
                 }),
                 defer_loading: false,
-            })],
+            })]),
             environments: Some(Vec::new()),
             ..StartThreadOptions::new(test.config.clone())
         })

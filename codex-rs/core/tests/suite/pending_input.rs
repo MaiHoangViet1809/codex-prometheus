@@ -1490,12 +1490,12 @@ async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "held_tool".to_string(),
                 description: "A tool held by the test until both steers are queued.".to_string(),
                 input_schema: json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await
@@ -1614,12 +1614,12 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "held_tool".into(),
                 description: "A tool held until the test responds.".into(),
                 input_schema: json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await
@@ -1918,12 +1918,12 @@ async fn input_preempts_response_and_yields_running_code_mode_call() {
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "held_tool".into(),
                 description: "A tool held until the test responds.".into(),
                 input_schema: json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await

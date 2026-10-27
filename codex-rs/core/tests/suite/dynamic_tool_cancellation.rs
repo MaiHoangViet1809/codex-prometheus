@@ -91,12 +91,12 @@ async fn interrupt_completes_cancelled_dynamic_call(hook: Option<HookEventName>)
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "gate".to_string(),
                 description: "Wait for a host reply.".to_string(),
                 input_schema: json!({"type": "object"}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?
@@ -186,12 +186,12 @@ async fn terminated_cell_persists_failure_and_excludes_late_reply_from_context()
         .thread_manager
         .start_thread(StartThreadOptions {
             environments: Some(vec![test.executor_environment().request()]),
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "lookup".to_string(),
                 description: "Look up a value.".to_string(),
                 input_schema: json!({"type": "object"}),
                 defer_loading: false,
-            })],
+            })]),
             history_mode: Some(ThreadHistoryMode::Paginated),
             ..StartThreadOptions::new(test.config.clone())
         })

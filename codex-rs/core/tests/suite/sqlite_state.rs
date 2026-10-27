@@ -357,7 +357,7 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     let started = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![dynamic_tool],
+            dynamic_tools: Some(vec![dynamic_tool]),
             history_mode: Some(codex_protocol::protocol::ThreadHistoryMode::Legacy),
             ..StartThreadOptions::new(base_test.config.clone())
         })

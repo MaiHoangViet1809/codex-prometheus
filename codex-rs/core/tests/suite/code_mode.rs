@@ -1161,24 +1161,26 @@ async fn code_mode_excludes_mcp_servers_using_their_configured_identity() -> Res
             let new_thread = base_test
                 .thread_manager
                 .start_thread(StartThreadOptions {
-                    dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
-                        name: namespace.to_string(),
-                        description: "An unrelated dynamic tool sharing the MCP namespace."
-                            .to_string(),
-                        tools: vec![DynamicToolNamespaceTool::Function(
-                            DynamicToolFunctionSpec {
-                                name: "unrelated".to_string(),
-                                description: "A dynamic tool that must remain in Code Mode."
-                                    .to_string(),
-                                input_schema: serde_json::json!({
-                                    "type": "object",
-                                    "properties": {},
-                                    "additionalProperties": false,
-                                }),
-                                defer_loading: false,
-                            },
-                        )],
-                    })],
+                    dynamic_tools: Some(vec![DynamicToolSpec::Namespace(
+                        DynamicToolNamespaceSpec {
+                            name: namespace.to_string(),
+                            description: "An unrelated dynamic tool sharing the MCP namespace."
+                                .to_string(),
+                            tools: vec![DynamicToolNamespaceTool::Function(
+                                DynamicToolFunctionSpec {
+                                    name: "unrelated".to_string(),
+                                    description: "A dynamic tool that must remain in Code Mode."
+                                        .to_string(),
+                                    input_schema: serde_json::json!({
+                                        "type": "object",
+                                        "properties": {},
+                                        "additionalProperties": false,
+                                    }),
+                                    defer_loading: false,
+                                },
+                            )],
+                        },
+                    )]),
                     ..StartThreadOptions::new(base_test.config.clone())
                 })
                 .await?;
@@ -8086,24 +8088,26 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
         let new_thread = base_test
             .thread_manager
             .start_thread(StartThreadOptions {
-                dynamic_tools: [
-                    ("foo-bar", "First normalized dynamic tool."),
-                    ("foo_bar", "Shadowed normalized dynamic tool."),
-                ]
-                .into_iter()
-                .map(|(name, description)| {
-                    DynamicToolSpec::Function(DynamicToolFunctionSpec {
-                        name: name.to_string(),
-                        description: description.to_string(),
-                        input_schema: serde_json::json!({
-                            "type": "object",
-                            "properties": {},
-                            "additionalProperties": false,
-                        }),
-                        defer_loading: false,
+                dynamic_tools: Some(
+                    [
+                        ("foo-bar", "First normalized dynamic tool."),
+                        ("foo_bar", "Shadowed normalized dynamic tool."),
+                    ]
+                    .into_iter()
+                    .map(|(name, description)| {
+                        DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                            name: name.to_string(),
+                            description: description.to_string(),
+                            input_schema: serde_json::json!({
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": false,
+                            }),
+                            defer_loading: false,
+                        })
                     })
-                })
-                .collect(),
+                    .collect(),
+                ),
                 ..StartThreadOptions::new(base_test.config.clone())
             })
             .await?;
@@ -8329,7 +8333,7 @@ async fn code_mode_renders_local_refs_in_outbound_exec_description() -> Result<(
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "boolean_search".to_string(),
                 description: "Search with nested Boolean clauses.".to_string(),
                 input_schema: serde_json::json!({
@@ -8363,7 +8367,7 @@ async fn code_mode_renders_local_refs_in_outbound_exec_description() -> Result<(
                     }
                 }),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;
@@ -8423,7 +8427,7 @@ async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools(
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![
+            dynamic_tools: Some(vec![
                 DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
                     name: "blocked".to_string(),
                     description: "Blocked hidden dynamic tools.".to_string(),
@@ -8455,7 +8459,7 @@ async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools(
                         },
                     )],
                 }),
-            ],
+            ]),
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;
@@ -8646,7 +8650,7 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
                 name: "excluded".to_string(),
                 description: "Excluded tools.".to_string(),
                 tools: vec![DynamicToolNamespaceTool::Function(
@@ -8661,7 +8665,7 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
                         defer_loading: false,
                     },
                 )],
-            })],
+            })]),
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;

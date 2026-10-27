@@ -1423,12 +1423,12 @@ async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
     let root = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "check_release".to_string(),
                 description: "Check whether the release is ready.".to_string(),
                 input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
                 defer_loading: false,
-            })],
+            })]),
             environments: Some(vec![test.executor_environment().request()]),
             ..StartThreadOptions::new(test.config.clone())
         })
@@ -2241,12 +2241,12 @@ async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "check_release".into(),
                 description: "Check whether the release is ready.".into(),
                 input_schema: json!({"type": "object", "properties": {}}),
                 defer_loading: false,
-            })],
+            })]),
             ..StartThreadOptions::new(test.config.clone())
         })
         .await?
