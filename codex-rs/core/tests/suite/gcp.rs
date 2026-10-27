@@ -161,7 +161,7 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
     let thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            dynamic_tools: vec![dynamic_tool],
+            dynamic_tools: Some(vec![dynamic_tool]),
             ..test.start_thread_options().await
         })
         .await?;
