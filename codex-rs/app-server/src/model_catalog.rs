@@ -183,7 +183,7 @@ mod tests {
         )?;
         let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
         let config = Arc::new(manager.load_non_project_config().await?);
-        let auth = AuthManager::shared_from_config(&config, false).await?;
+        let auth = AuthManager::shared_from_config(config.as_ref(), false).await?;
         let models = codex_core::build_models_manager(&config, Arc::clone(&auth));
         let catalog = Arc::new(ModelCatalog::new(manager, None, config, models, auth));
         let original = catalog.current().await?;
