@@ -1,8 +1,14 @@
 # Downstream app-server patches
 
-This fork keeps app-server changes independently reviewable. The production
-integration branch combines them; each upstream proposal has a separate branch.
+This fork keeps app-server changes independently reviewable. The combined
+integration branch carries them together; each proposed fix has a separate branch.
 Upstream remains `openai/codex`. Existing fork `main` is preserved.
+
+Upstream currently requests issue reports rather than external code PRs; see
+[`docs/contributing.md`](contributing.md). The catalog-refresh request is tracked
+in [openai/codex#49930](https://github.com/openai/codex/issues/49930), with a
+[current router reproduction](https://github.com/openai/codex/issues/49930#issuecomment-6451969496).
+Separate feature branches remain useful for review and future upstream adoption.
 
 ## Idle dynamic-tool declarations
 
