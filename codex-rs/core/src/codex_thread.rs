@@ -998,6 +998,11 @@ impl CodexThread {
         self.session.thread_settings_snapshot().await
     }
 
+    /// Returns the resolved model context and auto-compaction limits for this thread.
+    pub async fn resolved_context_budget(&self) -> (Option<i64>, Option<i64>, Option<i64>) {
+        self.session.resolved_context_budget().await
+    }
+
     /// Captures thread-owned settings and environment selections for runtime restoration.
     pub async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {
         self.session.restorable_thread_settings().await

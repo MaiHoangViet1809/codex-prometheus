@@ -9,6 +9,7 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadContextBudget } from "./ThreadContextBudget";
 
 export type ThreadResumeResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
@@ -27,6 +28,9 @@ sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, /**
  * Effective collaboration mode. Absent when resuming from an older server.
  */
 collaborationMode: CollaborationMode | null, /**
+ * Native-resolved limits; native does not expose an output reserve here.
+ */
+contextBudget?: ThreadContextBudget | null, /**
  * Opaque cursor for hydrating paginated turns backwards.
  *
  * Pass this as `cursor` to `thread/turns/list` with

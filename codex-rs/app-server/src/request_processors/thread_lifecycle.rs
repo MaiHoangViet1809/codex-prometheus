@@ -926,6 +926,8 @@ pub(super) async fn handle_pending_thread_resume_request(
     let session_id = conversation.startup_metadata().session_id.to_string();
     thread.session_id = session_id;
 
+    let (context_window, effective_context_window, auto_compact_token_limit) =
+        conversation.resolved_context_budget().await;
     let response = ThreadResumeResponse {
         thread,
         disabled_plugin_ids,
@@ -946,6 +948,11 @@ pub(super) async fn handle_pending_thread_resume_request(
         turns_backwards_cursor,
         items_backwards_cursor,
         dynamic_tools_digest,
+        context_budget: Some(codex_app_server_protocol::ThreadContextBudget {
+            context_window,
+            effective_context_window,
+            auto_compact_token_limit,
+        }),
     };
     outgoing
         .send_response_with_thread_originator(request_id, response, originator)

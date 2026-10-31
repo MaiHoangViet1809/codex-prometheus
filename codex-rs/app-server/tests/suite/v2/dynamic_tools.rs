@@ -49,6 +49,111 @@ const REMOTE_IMAGE_URL_ERROR: &str =
     "remote image URLs are not supported; use an inline data URL instead";
 
 #[tokio::test]
+async fn context_budget_ack_tracks_same_thread_cold_resume_overrides() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("Done")?,
+    ])
+    .await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request = client
+        .send_thread_start_request(ThreadStartParams {
+            config: Some(std::collections::HashMap::from([
+                ("model_context_window".to_string(), json!(100000)),
+                ("model_auto_compact_token_limit".to_string(), json!(80000)),
+            ])),
+            ..Default::default()
+        })
+        .await?;
+    let started: ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, client.read_response(request)).await??;
+    let budget = started.context_budget.context("start context ACK")?;
+    assert_eq!(budget.context_window, Some(100000));
+    assert_eq!(budget.auto_compact_token_limit, Some(80000));
+    let thread_id = started.thread.id;
+    let request = client
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Create persisted context".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, client.read_response(request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let request = client
+        .send_raw_request("thread/unsubscribe", Some(json!({"threadId": thread_id})))
+        .await?;
+    let _ = timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_response_message(RequestId::Integer(request)),
+    )
+    .await??;
+    let request = client
+        .send_raw_request(
+            "thread/resume",
+            Some(json!({
+                "threadId": thread_id, "excludeTurns": true,
+                "config": {"model_context_window": 150000, "model_auto_compact_token_limit": 110000}
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_response_message(RequestId::Integer(request)),
+    )
+    .await??;
+    let resumed: codex_app_server_protocol::ThreadResumeResponse = to_response(response)?;
+    assert_eq!(resumed.thread.id, thread_id);
+    let budget = resumed.context_budget.context("idle resume context ACK")?;
+    assert_eq!(budget.context_window, Some(150000));
+    assert_eq!(budget.auto_compact_token_limit, Some(110000));
+    timeout(DEFAULT_READ_TIMEOUT, client.shutdown_gracefully()).await??;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request = client
+        .send_raw_request(
+            "thread/resume",
+            Some(json!({
+                "threadId": thread_id, "excludeTurns": true,
+                "config": {"model_context_window": 200000, "model_auto_compact_token_limit": 150000}
+            })),
+        )
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        client.read_stream_until_response_message(RequestId::Integer(request)),
+    )
+    .await??;
+    let resumed: codex_app_server_protocol::ThreadResumeResponse = to_response(response)?;
+    assert_eq!(resumed.thread.id, thread_id);
+    let budget = resumed.context_budget.context("resume context ACK")?;
+    assert_eq!(budget.context_window, Some(200000));
+    assert!(
+        budget
+            .effective_context_window
+            .is_some_and(|value| value > 0 && value <= 200000)
+    );
+    assert_eq!(budget.auto_compact_token_limit, Some(150000));
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_resume_dynamic_tools_replace_clear_and_preserve_thread() -> Result<()> {
     let mut responses = vec![
         create_final_assistant_message_sse_response("Done")?,

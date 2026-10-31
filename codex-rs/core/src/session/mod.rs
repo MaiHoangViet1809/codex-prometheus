@@ -2206,6 +2206,22 @@ impl Session {
             .thread_settings_snapshot(&state.session_configuration.environments)
     }
 
+    pub(crate) async fn resolved_context_budget(&self) -> (Option<i64>, Option<i64>, Option<i64>) {
+        let configuration = self.state.lock().await.session_configuration.clone();
+        let model = configuration
+            .step_settings
+            .resolve_model_info(
+                self.services.models_manager.as_ref(),
+                &configuration.model_info_overrides,
+            )
+            .await;
+        (
+            model.resolved_context_window(),
+            model.usable_context_window(),
+            model.auto_compact_token_limit(),
+        )
+    }
+
     pub(crate) async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {
         let state = self.state.lock().await;
         state

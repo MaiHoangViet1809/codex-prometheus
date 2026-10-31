@@ -5207,6 +5207,15 @@ class ThreadCompactStartResponse(BaseModel):
     )
 
 
+class ThreadContextBudget(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    auto_compact_token_limit: Annotated[int | None, Field(alias="autoCompactTokenLimit")] = None
+    context_window: Annotated[int | None, Field(alias="contextWindow")] = None
+    effective_context_window: Annotated[int | None, Field(alias="effectiveContextWindow")] = None
+
+
 class ThreadDeleteParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -12778,6 +12787,13 @@ class ThreadResumeResponse(BaseModel):
             description="Effective collaboration mode. Absent when resuming from an older server.",
         ),
     ] = None
+    context_budget: Annotated[
+        ThreadContextBudget | None,
+        Field(
+            alias="contextBudget",
+            description="Native-resolved limits; native does not expose an output reserve here.",
+        ),
+    ] = None
     cwd: AbsolutePathBuf
     disabled_plugin_ids: Annotated[
         list[str] | None,
@@ -12867,6 +12883,7 @@ class ThreadStartResponse(BaseModel):
             description="Reviewer currently used for approval requests on this thread.",
         ),
     ]
+    context_budget: Annotated[ThreadContextBudget | None, Field(alias="contextBudget")] = None
     cwd: AbsolutePathBuf
     disabled_plugin_ids: Annotated[
         list[str] | None,

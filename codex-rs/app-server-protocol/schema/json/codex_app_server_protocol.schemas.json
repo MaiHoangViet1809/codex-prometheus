@@ -21914,6 +21914,32 @@
         "title": "ThreadCompactStartResponse",
         "type": "object"
       },
+      "ThreadContextBudget": {
+        "properties": {
+          "autoCompactTokenLimit": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "contextWindow": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effectiveContextWindow": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ThreadDeleteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -24683,6 +24709,17 @@
             ],
             "description": "Effective collaboration mode. Absent when resuming from an older server."
           },
+          "contextBudget": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadContextBudget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Native-resolved limits; native does not expose an output reserve here."
+          },
           "cwd": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
@@ -25413,6 +25450,16 @@
               }
             ],
             "description": "Reviewer currently used for approval requests on this thread."
+          },
+          "contextBudget": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadContextBudget"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "cwd": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"

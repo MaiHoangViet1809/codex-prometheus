@@ -3286,6 +3286,7 @@ mod tests {
         let response = ClientResponse::ThreadStart {
             request_id: RequestId::Integer(7),
             response: v2::ThreadStartResponse {
+                context_budget: None,
                 disabled_plugin_ids: Vec::new(),
                 thread: v2::Thread {
                     originator: None,

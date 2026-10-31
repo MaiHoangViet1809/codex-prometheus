@@ -1578,6 +1578,32 @@
       ],
       "type": "string"
     },
+    "ThreadContextBudget": {
+      "properties": {
+        "autoCompactTokenLimit": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "contextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "effectiveContextWindow": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ThreadEnvironment": {
       "description": "An environment selected by a loaded thread, independent of connection status.",
       "properties": {
@@ -3134,6 +3160,16 @@
         }
       ],
       "description": "Reviewer currently used for approval requests on this thread."
+    },
+    "contextBudget": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadContextBudget"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "cwd": {
       "$ref": "#/definitions/AbsolutePathBuf"

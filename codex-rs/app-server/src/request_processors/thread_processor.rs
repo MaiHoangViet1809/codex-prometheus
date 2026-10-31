@@ -1699,6 +1699,8 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.config_snapshot",
             ))
             .await;
+        let (context_window, effective_context_window, auto_compact_token_limit) =
+            thread.resolved_context_budget().await;
         let mut thread = build_thread_from_snapshot(
             thread_id,
             session_configured.session_id.to_string(),
@@ -1756,6 +1758,11 @@ impl ThreadRequestProcessor {
         let thread_originator = config_snapshot.originator.clone();
 
         let response = ThreadStartResponse {
+            context_budget: Some(codex_app_server_protocol::ThreadContextBudget {
+                context_window,
+                effective_context_window,
+                auto_compact_token_limit,
+            }),
             thread: thread.clone(),
             disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
             model: config_snapshot.model,
@@ -4586,7 +4593,14 @@ impl ThreadRequestProcessor {
                 }
 
                 let thread_originator = config_snapshot.originator.clone();
+                let (context_window, effective_context_window, auto_compact_token_limit) =
+                    codex_thread.resolved_context_budget().await;
                 let response = ThreadResumeResponse {
+                    context_budget: Some(codex_app_server_protocol::ThreadContextBudget {
+                        context_window,
+                        effective_context_window,
+                        auto_compact_token_limit,
+                    }),
                     thread,
                     disabled_plugin_ids: config_snapshot.disabled_plugin_ids,
                     model: session_configured.model,

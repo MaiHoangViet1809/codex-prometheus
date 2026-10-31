@@ -8,8 +8,9 @@ import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { Thread } from "./Thread";
+import type { ThreadContextBudget } from "./ThreadContextBudget";
 
-export type ThreadStartResponse = {thread: Thread, model: string, modelProvider: string, serviceTier: string | null, /**
+export type ThreadStartResponse = {thread: Thread, contextBudget?: ThreadContextBudget | null, model: string, modelProvider: string, serviceTier: string | null, /**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
  */
 disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, /**

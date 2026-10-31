@@ -289,6 +289,11 @@ fn thread_resume_params_accept_turns_page_bootstrap() {
 #[test]
 fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
+        context_budget: Some(ThreadContextBudget {
+            context_window: Some(1000),
+            effective_context_window: Some(950),
+            auto_compact_token_limit: Some(850),
+        }),
         dynamic_tools_digest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
             .to_string(),
         disabled_plugin_ids: Vec::new(),

@@ -187,6 +187,8 @@ pub struct MockExperimentalMethodResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget: Option<ThreadContextBudget>,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<String>,
@@ -487,6 +489,9 @@ pub struct ThreadResumeResponse {
     #[experimental("thread/resume.dynamicToolsDigest")]
     #[serde(default)]
     pub dynamic_tools_digest: String,
+    /// Native-resolved limits; native does not expose an output reserve here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_budget: Option<ThreadContextBudget>,
     /// Opaque cursor for hydrating paginated turns backwards.
     ///
     /// Pass this as `cursor` to `thread/turns/list` with
@@ -499,6 +504,15 @@ pub struct ThreadResumeResponse {
     /// `sortDirection: "desc"`. The first page includes the item identified by the cursor.
     #[serde(default)]
     pub items_backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadContextBudget {
+    pub context_window: Option<i64>,
+    pub effective_context_window: Option<i64>,
+    pub auto_compact_token_limit: Option<i64>,
 }
 
 impl ThreadResumeResponse {
