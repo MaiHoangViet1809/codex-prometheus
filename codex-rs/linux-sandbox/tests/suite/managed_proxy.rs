@@ -330,7 +330,7 @@ async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritanc
 for arg in "$@"; do
     [ "$arg" = "--" ] && break
     if [ "$arg" = "--proc" ]; then
-        printf '%s\n' "bwrap: Can't mount proc on /newroot/proc: Operation not permitted" >&2
+        printf '%s\n' "bwrap: Can't mount proc on /proc: Operation not permitted" >&2
         exit 1
     fi
 done
@@ -371,6 +371,18 @@ set -eu
 printf 'command started\n'
 IFS=' ' read -r proc_pid rest < /proc/self/stat
 test "$$" != "$proc_pid"
+test "$(readlink /proc/self/ns/pid)" != "$CODEX_TEST_PID_NAMESPACE"
+if (printf changed > "$CODEX_TEST_PROTECTED_FILE") 2>/dev/null; then exit 1; fi
+test "$(readlink /proc/self/ns/user)" != "$CODEX_TEST_USER_NAMESPACE"
+test "$(readlink /proc/self/ns/ipc)" != "$CODEX_TEST_IPC_NAMESPACE"
+test "$(readlink /proc/self/ns/net)" != "$CODEX_TEST_NET_NAMESPACE"
+while read -r key value rest; do
+    case "$key" in
+        CapEff:) test "$value" = 0000000000000000 ;;
+        NoNewPrivs:) test "$value" = 1 ;;
+        Seccomp:) test "$value" = 2 ;;
+    esac
+done < /proc/self/status
 printf 'legacy proc fallback\n'
 "#;
 

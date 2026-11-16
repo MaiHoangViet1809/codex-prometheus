@@ -38,6 +38,18 @@ fn detects_proc_mount_operation_not_permitted_failure() {
 }
 
 #[test]
+fn detects_proc_mount_denial_from_alpine_bubblewrap() {
+    for reason in [
+        "Invalid argument",
+        "Operation not permitted",
+        "Permission denied",
+    ] {
+        let stderr = format!("bwrap: Can't mount proc on /proc: {reason}");
+        assert!(is_proc_mount_failure(&stderr));
+    }
+}
+
+#[test]
 fn detects_proc_mount_permission_denied_failure() {
     let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
     assert!(is_proc_mount_failure(stderr));
