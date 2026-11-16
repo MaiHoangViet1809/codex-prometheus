@@ -885,3 +885,60 @@ fn test_invocation(
         },
     }
 }
+
+#[tokio::test]
+async fn native_takeover_fence_covers_direct_and_code_mode_but_not_another_session() {
+    use crate::tools::context::ToolCallSource;
+    use crate::tools::handlers::native_takeover::NativeTakeoverFence;
+    use codex_tools::ToolName;
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let (other, other_turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let fence = session
+        .services
+        .session_extension_data
+        .get_or_init(NativeTakeoverFence::default);
+    let generation = fence.enter().unwrap();
+    let name = ToolName::plain("ordinary");
+    let registry = ToolRegistry::from_tools([Arc::new(TestHandler {
+        tool_name: name.clone(),
+    }) as Arc<dyn CoreToolRuntime>]);
+    for source in [
+        ToolCallSource::Direct,
+        ToolCallSource::CodeMode {
+            cell_id: "cell".to_string(),
+            runtime_tool_call_id: "nested".to_string(),
+        },
+    ] {
+        let mut invocation = test_invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "call",
+            name.clone(),
+        );
+        invocation.source = source;
+        assert!(
+            registry
+                .dispatch_any_with_state(invocation, None)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        registry
+            .dispatch_any_with_state(
+                test_invocation(Arc::new(other), Arc::new(other_turn), "other", name.clone()),
+                None
+            )
+            .await
+            .is_ok()
+    );
+    fence.deny_before_dispatch(generation).unwrap();
+    assert!(
+        registry
+            .dispatch_any_with_state(test_invocation(session, turn, "after", name), None)
+            .await
+            .is_ok()
+    );
+}

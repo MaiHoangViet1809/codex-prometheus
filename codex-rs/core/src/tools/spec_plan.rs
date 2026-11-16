@@ -146,7 +146,72 @@ pub(crate) fn build_tool_router(
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
     let mut registry = ToolRegistry::with_tool_policy(Arc::clone(&session.tool_policy));
+    if session
+        .services
+        .session_extension_data
+        .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        .is_some_and(|fence| fence.needs_recovery())
+    {
+        registry.add_with_exposure(
+            crate::tools::handlers::native_takeover::MatrixRecoveryTool,
+            ToolExposure::DirectModelOnly,
+        );
+        return finalize_tool_router(
+            turn_context,
+            model_info,
+            registry,
+            Vec::new(),
+            &session.services.tool_search_handler_cache,
+        );
+    }
     add_core_tool_sources(&context, &mut registry);
+    if let Some(fence) = session
+        .services
+        .session_extension_data
+        .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        && let Some(scope) = fence.overlay()
+    {
+        use crate::tools::handlers::native_takeover::{MatrixStep, MatrixTool};
+        let names = registry
+            .entries()
+            .map(|tool| tool.runtime.tool_name())
+            .collect::<Vec<_>>();
+        for name in names {
+            if !["exec_command", "write_stdin", "apply_patch"].contains(&name.name.as_str()) {
+                registry.remove(&name);
+            }
+        }
+        for tool in &scope.tools {
+            registry.add(MatrixTool {
+                scope: Arc::clone(&scope),
+                spec: tool.clone(),
+                exit: false,
+            });
+        }
+        registry.add(MatrixTool {
+            scope: Arc::clone(&scope),
+            spec: MatrixTool::exit_spec(),
+            exit: true,
+        });
+        step_store.insert(MatrixStep {
+            scope: Arc::clone(&scope),
+        });
+        return finalize_tool_router(
+            turn_context,
+            model_info,
+            registry,
+            Vec::new(),
+            &session.services.tool_search_handler_cache,
+        );
+    }
+    if turn_context.config.dev_native_takeover_socket.is_some()
+        && !turn_context.session_source.is_non_root_agent()
+    {
+        registry.add_with_exposure(
+            crate::tools::handlers::native_takeover::NativeTakeoverHandler,
+            ToolExposure::DirectModelOnly,
+        );
+    }
 
     let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
         mcp,

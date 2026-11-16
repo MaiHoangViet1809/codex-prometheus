@@ -187,6 +187,13 @@ impl CommandHookRuntime {
         });
     }
 
+    pub(crate) fn has_running_tasks(&self) -> bool {
+        let mut state = self.lock_state();
+        // Reap completed bookkeeping only; never cancel or wait for live hooks.
+        while state.tasks.try_join_next().is_some() {}
+        !state.tasks.is_empty()
+    }
+
     pub(crate) async fn shutdown(&self) {
         let mut tasks = {
             let mut state = self.lock_state();

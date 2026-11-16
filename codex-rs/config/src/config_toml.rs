@@ -255,6 +255,9 @@ pub struct ConfigToml {
     #[serde(default)]
     pub developer_instructions: Option<String>,
 
+    /// Private developer takeover control socket. Omitted keeps takeover disabled.
+    pub dev_native_takeover_socket: Option<AbsolutePathBuf>,
+
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: Option<bool>,
 

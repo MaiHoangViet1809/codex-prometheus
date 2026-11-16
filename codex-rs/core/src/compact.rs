@@ -315,12 +315,20 @@ async fn run_compact_task_inner_impl(
         } else {
             fallback_instructions.clone()
         };
-        let prompt = Prompt {
+        let mut prompt = Prompt {
             input: turn_input,
             base_instructions,
             cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()
         };
+        if let Some(fence) = sess
+            .services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        {
+            fence.apply_prompt(&mut prompt);
+        }
+
         let responses_metadata = sess
             .compaction_responses_metadata(turn_context.as_ref(), compaction_metadata)
             .await;

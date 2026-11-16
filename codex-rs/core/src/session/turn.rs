@@ -1795,6 +1795,13 @@ async fn run_sampling_request(
             base_instructions.clone(),
             incremental_tools,
         );
+        if let Some(fence) = sess
+            .services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        {
+            fence.apply_prompt(&mut prompt);
+        }
         let responses_metadata = sess
             .responses_metadata(step_context.as_ref(), CodexResponsesRequestKind::Turn)
             .await;
@@ -2671,6 +2678,17 @@ async fn try_run_sampling_request(
     cancellation_token: CancellationToken,
     draining_for_mailbox: &mut bool,
 ) -> CodexResult<SamplingRequestResult> {
+    let native_boundary = sess
+        .services
+        .session_extension_data
+        .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        .map(|fence| fence.begin_sampling())
+        .transpose()
+        .map_err(|_| {
+            CodexErr::UnsupportedOperation(
+                "Origin inference is fenced by native takeover".to_string(),
+            )
+        })?;
     let turn_context = Arc::clone(&step_context.turn);
     feedback_tags!(
         model = step_context.settings.model_info.slug.clone(),
@@ -3425,6 +3443,11 @@ async fn try_run_sampling_request(
         })
         .await;
     }
+    if response_completed && let Some(boundary) = &native_boundary {
+        boundary.complete();
+    }
+    // Signal after response hooks, before draining enter_matrix which awaits this boundary.
+    drop(native_boundary);
     flush_assistant_text_segments_all(
         &sess,
         &turn_context,

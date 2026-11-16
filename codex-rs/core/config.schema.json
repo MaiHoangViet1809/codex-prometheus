@@ -7432,6 +7432,14 @@
       "description": "Opaque desktop settings stored alongside the rest of config.toml.",
       "type": "object"
     },
+    "dev_native_takeover_socket": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Private developer takeover control socket. Omitted keeps takeover disabled."
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",

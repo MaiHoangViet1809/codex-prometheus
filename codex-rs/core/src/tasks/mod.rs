@@ -276,6 +276,21 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let _takeover_admission = match self.native_takeover_admission() {
+            Ok(permit) => permit,
+            Err(error) => {
+                self.send_event(
+                    &turn_context,
+                    EventMsg::Error(ErrorEvent {
+                        message: error.to_string(),
+                        codex_error_info: None,
+                        misalignment: None,
+                    }),
+                )
+                .await;
+                return;
+            }
+        };
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
         self.start_task(turn_context, input, task).await;
@@ -291,6 +306,21 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) {
+        let _takeover_admission = match self.native_takeover_admission() {
+            Ok(permit) => permit,
+            Err(error) => {
+                self.send_event(
+                    &turn_context,
+                    EventMsg::Error(ErrorEvent {
+                        message: error.to_string(),
+                        codex_error_info: None,
+                        misalignment: None,
+                    }),
+                )
+                .await;
+                return;
+            }
+        };
         // Replace the cache; in-flight acquisitions retain their previous Arc.
         self.services
             .thread_extension_data
@@ -640,6 +670,13 @@ impl Session {
     ) {
         let task = active_turn.task.take();
         if let Some(task) = task {
+            if let Some(fence) =
+                self.services
+                    .session_extension_data
+                    .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+            {
+                fence.origin_turn_ended(&task.turn_context.sub_id);
+            }
             self.handle_task_abort(task, reason.clone(), &active_turn.turn_state, error)
                 .await;
         }
@@ -657,6 +694,13 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        if let Some(fence) = self
+            .services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+        {
+            fence.origin_turn_ended(&turn_context.sub_id);
+        }
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {

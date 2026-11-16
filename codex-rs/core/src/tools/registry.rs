@@ -77,6 +77,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         false
     }
 
+    /// Only the trusted native enter handler is exempt from ordinary session admission.
+    fn is_native_takeover_control(&self) -> bool {
+        false
+    }
+
     /// Returns a shared spec when both the spec and search metadata are immutable.
     fn immutable_spec(&self) -> Option<&Arc<ToolSpec>> {
         None
@@ -135,6 +140,11 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
     /// Observes a tool result only after all PostToolUse hooks accept it.
     fn on_tool_result_accepted(&self, _invocation: &ToolInvocation, _result: &dyn ToolOutput) {}
 
+    /// Preserve source hook identity when a transport uses a different callable name.
+    fn hook_tool_name(&self, invocation: &ToolInvocation) -> HookToolName {
+        function_hook_tool_name(invocation)
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
@@ -146,7 +156,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
         Some(PostToolUsePayload {
             tool_cwd: result.post_tool_use_cwd(),
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_use_id: result.post_tool_use_id(&invocation.call_id),
             tool_input: result
                 .post_tool_use_input(&invocation.payload)
@@ -176,7 +186,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PreToolUsePayload {
-            tool_name: function_hook_tool_name(invocation),
+            tool_name: self.hook_tool_name(invocation),
             tool_input: function_hook_tool_input(arguments),
         })
     }
@@ -819,6 +829,21 @@ impl ToolRegistry {
             .await;
             err
         };
+        let _takeover_admission = if tool.is_native_takeover_control() {
+            None
+        } else {
+            match invocation
+                .session
+                .services
+                .session_extension_data
+                .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+                .map(|fence| fence.admit_tool(&invocation))
+                .transpose()
+            {
+                Ok(permit) => permit,
+                Err(error) => return Err(fail_before_execution(&invocation, error).await),
+            }
+        };
         let environments = match tool.live_environment_resolver() {
             Some(resolve) => resolve(&invocation).await,
             None => tool.environments_for_input(&invocation),
@@ -827,6 +852,15 @@ impl ToolRegistry {
             Ok(environments) => environments,
             Err(err) => return Err(fail_before_execution(&invocation, err).await),
         };
+        if let Some(fence) = invocation
+            .session
+            .services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+            && let Err(error) = fence.check_resolved_environment(&invocation)
+        {
+            return Err(fail_before_execution(&invocation, error).await);
+        }
         if let Some(pre_tool_use_payload) = tool.pre_tool_use_payload(&invocation) {
             let tool_cwd = match tool.pre_tool_use_cwd(&invocation) {
                 Ok(cwd) => cwd,
@@ -871,6 +905,18 @@ impl ToolRegistry {
                     updated_input: None,
                 } => {}
             }
+        }
+
+        // Trusted hooks can rewrite input; XVision must approve the effective command.
+        if let Some(scope) = invocation
+            .session
+            .services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+            .and_then(|fence| fence.overlay())
+            && let Err(error) = scope.authorize_native(&invocation).await
+        {
+            return Err(fail_before_execution(&invocation, error).await);
         }
 
         if tool.requires_guardian_review(&invocation)

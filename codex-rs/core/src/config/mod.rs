@@ -716,6 +716,9 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
+    /// Private developer takeover control socket; disabled when absent.
+    pub dev_native_takeover_socket: Option<AbsolutePathBuf>,
+
     /// Guardian-specific policy config override from requirements.toml or config.toml.
     /// This is inserted into the fixed guardian prompt template under the
     /// `# Policy Configuration` section rather than replacing the whole
@@ -1637,6 +1640,28 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
             Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
         }
     }
+}
+
+fn resolve_dev_takeover_socket(
+    configured: Option<AbsolutePathBuf>,
+    environment: Option<std::ffi::OsString>,
+) -> std::io::Result<Option<AbsolutePathBuf>> {
+    if configured.is_some() {
+        return Ok(configured);
+    }
+    environment
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            let path = std::path::PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "CODEX_DEV_NATIVE_TAKEOVER_SOCKET must be an absolute path",
+                ));
+            }
+            AbsolutePathBuf::try_from(path)
+        })
+        .transpose()
 }
 
 impl Config {
@@ -4553,6 +4578,8 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            dev_native_takeover_socket: resolve_dev_takeover_socket(
+                cfg.dev_native_takeover_socket, std::env::var_os("CODEX_DEV_NATIVE_TAKEOVER_SOCKET"))?,
             include_permissions_instructions,
             include_apps_instructions,
             include_collaboration_mode_instructions,

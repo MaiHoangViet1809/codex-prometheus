@@ -14,6 +14,7 @@ pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
 pub(crate) mod multi_agents_spec;
 pub(crate) mod multi_agents_v2;
+pub(crate) mod native_takeover;
 mod new_context_window;
 pub(crate) mod new_context_window_spec;
 mod plan;

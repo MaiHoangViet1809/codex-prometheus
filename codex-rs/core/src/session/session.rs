@@ -698,6 +698,23 @@ impl Session {
         self.thread_id
     }
 
+    pub(crate) fn native_takeover_admission(
+        &self,
+    ) -> Result<
+        Option<crate::tools::handlers::native_takeover::DispatchPermit>,
+        crate::function_tool::FunctionCallError,
+    > {
+        self.services
+            .session_extension_data
+            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
+            .map(|fence| fence.admit_task())
+            .transpose()
+    }
+
+    pub(crate) async fn has_background_compaction(&self) -> bool {
+        self.state.lock().await.async_compaction.has_running_tasks()
+    }
+
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
         self.services.agent_control.identity()
@@ -1728,6 +1745,13 @@ impl Session {
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());
             session_extension_data.insert(session_telemetry.clone());
+            let native_takeover_fence =
+                crate::tools::handlers::native_takeover::NativeTakeoverFence::from_history(
+                    initial_history.get_rollout_items(),
+                );
+            if config.dev_native_takeover_socket.is_some() || native_takeover_fence.is_fenced() {
+                session_extension_data.insert(native_takeover_fence);
+            }
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
             let extension_metrics =
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
