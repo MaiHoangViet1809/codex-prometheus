@@ -1,10 +1,4 @@
 use crate::config::edit::ConfigEdit;
-
-#[test]
-fn dev_native_takeover_defaults_disabled() {
-    let config: codex_config::config_toml::ConfigToml = toml::from_str("").unwrap();
-    assert!(config.dev_native_takeover_socket.is_none());
-}
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::context::ContextualUserFragment;
@@ -13977,30 +13971,4 @@ fn sqlite_home_env_conflict_reports_an_override() -> std::io::Result<()> {
     assert!(warnings.is_empty());
 
     Ok(())
-}
-
-#[test]
-fn dev_takeover_launch_environment_is_explicit_and_config_keeps_precedence() {
-    let path = codex_utils_absolute_path::AbsolutePathBuf::try_from(std::path::PathBuf::from(
-        "/private/control.sock",
-    ))
-    .unwrap();
-    assert_eq!(
-        super::resolve_dev_takeover_socket(None, None).unwrap(),
-        None
-    );
-    assert_eq!(
-        super::resolve_dev_takeover_socket(None, Some("".into())).unwrap(),
-        None
-    );
-    assert!(super::resolve_dev_takeover_socket(None, Some("relative.sock".into())).is_err());
-    assert_eq!(
-        super::resolve_dev_takeover_socket(None, Some("/private/control.sock".into())).unwrap(),
-        Some(path.clone())
-    );
-    assert_eq!(
-        super::resolve_dev_takeover_socket(Some(path.clone()), Some("ignored.sock".into()))
-            .unwrap(),
-        Some(path)
-    );
 }

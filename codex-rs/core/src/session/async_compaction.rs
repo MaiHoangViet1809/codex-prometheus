@@ -37,12 +37,6 @@ pub(crate) struct AsyncCompactionState {
     shutdown_cancellation: CancellationToken,
 }
 
-impl AsyncCompactionState {
-    pub(crate) fn has_running_tasks(&self) -> bool {
-        !self.tasks.is_empty()
-    }
-}
-
 pub(super) fn enabled(turn_context: &TurnContext) -> bool {
     turn_context
         .config

@@ -204,11 +204,6 @@ impl Hooks {
         }
     }
 
-    /// Observe live asynchronous work without interrupting hooks.
-    pub fn has_running_tasks(&self) -> bool {
-        self.engine.command_runtime.has_running_tasks()
-    }
-
     /// Abort and join outstanding async hooks during session shutdown.
     pub async fn shutdown(&self) {
         self.engine.command_runtime.shutdown().await;

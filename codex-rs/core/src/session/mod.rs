@@ -4105,23 +4105,7 @@ impl Session {
             settings.model_info.as_ref(),
         );
         let session_telemetry = settings.telemetry(&turn_context.session_telemetry);
-        let matrix = self
-            .services
-            .session_extension_data
-            .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
-            .and_then(|fence| fence.overlay());
-        let environments = if let Some(scope) = matrix {
-            if scope.model != settings.model_info.slug
-                || scope.provider != turn_context.config.model_provider_id
-            {
-                return Err(CodexErr::UnsupportedOperation(
-                    "Native takeover preserves the origin model/provider".to_string(),
-                ));
-            }
-            scope.environments.clone()
-        } else {
-            environments.or_cancel(cancellation_token).await?
-        };
+        let environments = environments.or_cancel(cancellation_token).await?;
         let inherited_environments = inherited_environments.unwrap_or_else(|| environments.clone());
         // Keep both preparation futures off caller stacks while they are live together.
         let load_agents_md = Box::pin(async {

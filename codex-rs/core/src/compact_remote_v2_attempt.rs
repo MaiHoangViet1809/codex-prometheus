@@ -170,7 +170,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
     let tool_router = &step_context.tool_router;
     input.push(ResponseItem::CompactionTrigger {});
-    let mut prompt = Prompt {
+    let prompt = Prompt {
         input,
         tools: if tools_in_history {
             Arc::default()
@@ -183,13 +183,6 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
     };
-    if let Some(fence) = sess
-        .services
-        .session_extension_data
-        .get::<crate::tools::handlers::native_takeover::NativeTakeoverFence>()
-    {
-        fence.apply_prompt(&mut prompt);
-    }
 
     let mut responses_metadata = match captured_window {
         Some(window) => {
