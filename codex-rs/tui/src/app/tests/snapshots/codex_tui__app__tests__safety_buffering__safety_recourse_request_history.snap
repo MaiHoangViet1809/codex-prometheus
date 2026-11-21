@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/tests/safety_buffering.rs
-assertion_line: 284
 expression: "context_snapshot::format_request_history_snapshot(\"The fork excludes the blocked turn and submits the selected rewrite.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: The fork excludes the blocked turn and submits the selected rewrite.
@@ -12,7 +11,10 @@ Scenario: The fork excludes the blocked turn and submits the selected rewrite.
 01:message/developer[3]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-    [03] <COLLABORATION_MODE>
+    [03] <tools>
+        Deferred tool namespaces:
+        - codex_tui: Manage Codex tasks available through the connected app server.
+        </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:
@@ -25,7 +27,10 @@ Scenario: The fork excludes the blocked turn and submits the selected rewrite.
 01:message/developer[3]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-    [03] <COLLABORATION_MODE>
+    [03] <tools>
+        Deferred tool namespaces:
+        - codex_tui: Manage Codex tasks available through the connected app server.
+        </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:

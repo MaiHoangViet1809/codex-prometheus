@@ -13,6 +13,10 @@ concurrency:
   group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 
+env:
+  CODEX_BAZEL_GCS_BUCKET: ${{ secrets.CODEX_BAZEL_GCS_BUCKET }}
+  CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.CODEX_BAZEL_GCS_WORKLOAD_IDENTITY_PROVIDER }}
+
 jobs:
   metadata:
     runs-on: ubuntu-latest
@@ -77,6 +81,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      id-token: write
       actions: read
     environment:
       name: bazel
@@ -109,13 +114,13 @@ jobs:
             sandbox: true
             target: aarch64-unknown-linux-gnu
             variant: ptrcomp-sandbox
-          - runner: macos-15-xlarge
+          - runner: macos-15-intel
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: false
             target: x86_64-apple-darwin
             variant: release
-          - runner: macos-15-xlarge
+          - runner: macos-15-intel
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: true
@@ -174,13 +179,13 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Rust toolchain for Cargo smoke
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.99.1"
+          targets: ${{ matrix.target }}
 
       - name: Build Bazel V8 release pair
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
@@ -202,7 +207,7 @@ jobs:
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
 
-          ./.github/scripts/run_bazel_with_buildbuddy.py \
+          ./.github/scripts/run_bazel.py \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
             "--config=${{ matrix.bazel_config }}"
@@ -210,7 +215,6 @@ jobs:
       - name: Stage release pair
         env:
           BAZEL_CONFIG: ${{ matrix.bazel_config }}
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
@@ -230,6 +234,26 @@ jobs:
 
           python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
 
+      # Larger Linux runner images may omit the host linker used by Cargo build scripts.
+      - name: Install native Linux Cargo smoke dependencies
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(build-essential)
+          if [[ "${TARGET}" == *-musl ]]; then
+            packages+=(musl-tools)
+          fi
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+          if [[ "${TARGET}" == *-musl ]]; then
+            # Use musl only for target links; Cargo build scripts still link on the glibc host.
+            linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
+            echo "${linker_var//-/_}=$(command -v musl-gcc)" >> "${GITHUB_ENV}"
+          fi
+
       - name: Smoke test staged artifact with Cargo
         env:
           SANDBOX: ${{ matrix.sandbox }}
@@ -238,16 +262,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          host_arch="$(uname -m)"
-          case "${TARGET}:${host_arch}" in
-            x86_64-apple-darwin:x86_64|aarch64-apple-darwin:arm64|x86_64-unknown-linux-gnu:x86_64|aarch64-unknown-linux-gnu:aarch64)
-              ;;
-            *)
-              echo "Skipping non-native Cargo smoke for ${TARGET} on ${host_arch}."
-              exit 0
-              ;;
-          esac
-
           archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'librusty_v8_*.a.gz' -print -quit)"
           binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
           if [[ -z "${archive}" || -z "${binding}" ]]; then
@@ -255,10 +269,11 @@ jobs:
             exit 1
           fi
 
-          cargo_args=(test -p codex-v8-poc)
+          cargo_args=(test -p codex-v8-poc --target "${TARGET}")
           if [[ "${SANDBOX}" == "true" ]]; then
             cargo_args+=(--features sandbox)
           fi
+          cargo_args+=(-- --include-ignored)
 
           (
             cd codex-rs
@@ -332,9 +347,9 @@ jobs:
           architecture: x64
 
       - name: Set up Codex Rust toolchain for Cargo smoke
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.99.1"
           targets: ${{ matrix.target }}
 
       - name: Install rusty_v8 Rust toolchain
@@ -387,6 +402,11 @@ jobs:
 
       - name: Build upstream rusty_v8 sandbox release pair
         env:
+          # Stage ICU data for mksnapshot. Code mode registers its own copy at runtime.
+          GN_ARGS: >-
+            icu_use_data_file=true
+            icu_copy_icudata_to_root_build_dir=true
+            v8_depend_on_icu_data_file=true
           SCCACHE_IDLE_TIMEOUT: 0
           TARGET: ${{ matrix.target }}
           V8_FROM_SOURCE: "1"
@@ -424,7 +444,7 @@ jobs:
             cd codex-rs
             RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
             RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
-            cargo +1.95.0 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
+            cargo +1.99.1 test -p codex-v8-poc --target "${TARGET}" --features sandbox --no-run
           )
 
       - name: Upload staged artifacts

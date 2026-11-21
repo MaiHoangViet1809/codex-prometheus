@@ -14,7 +14,6 @@ use crate::mitm_hook::MitmHooksByHost;
 use crate::mitm_hook::evaluate_mitm_hooks;
 use crate::network_policy::NetworkPolicyAuditObserver;
 use crate::policy::Host;
-use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
 use crate::policy::unscoped_ip_literal;
@@ -91,7 +90,7 @@ impl std::fmt::Display for HostBlockReason {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HostAuthorization {
     RequireAllowlist,
     Approved,
@@ -286,7 +285,9 @@ pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     /// Belongs to this proxy; config retains omission for launches on other executors.
     pub(crate) local_binding_policy: LocalBindingPolicy,
+    standalone: bool,
     pub(crate) proxy_private_ips_via_upstream: bool,
+    pub(crate) tcp_upstream_proxy: Option<crate::TcpUpstreamProxy>,
     reloader: Arc<dyn ConfigReloader>,
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
     pub(crate) policy_audit_observer: Option<NetworkPolicyAuditObserver>,
@@ -327,7 +328,9 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             local_binding_policy: self.local_binding_policy,
+            standalone: self.standalone,
             proxy_private_ips_via_upstream: self.proxy_private_ips_via_upstream,
+            tcp_upstream_proxy: self.tcp_upstream_proxy.clone(),
             reloader: self.reloader.clone(),
             blocked_request_observer: self.blocked_request_observer.clone(),
             policy_audit_observer: self.policy_audit_observer.clone(),
@@ -348,6 +351,20 @@ impl NetworkProxyState {
     /// Set by the execution host, independently of reloadable or remote policy.
     pub fn set_proxy_private_ips_via_upstream(&mut self, enabled: bool) {
         self.proxy_private_ips_via_upstream = enabled;
+    }
+
+    /// Require the trusted HTTP CONNECT endpoint for opaque SOCKS TCP connections.
+    pub fn set_tcp_upstream_proxy(&mut self, proxy: crate::TcpUpstreamProxy) {
+        self.tcp_upstream_proxy = Some(proxy);
+    }
+
+    /// A remote DNS answer cannot be checked at our direct socket boundary.
+    pub(crate) async fn permits_remote_tcp_dns(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(self.local_binding_policy.resolve(&guard.config)
+            && !guard.deny_set.may_restrict_ip()
+            && !guard.review_set.may_restrict_ip())
     }
 
     /// Builds runtime state for one executor-local proxy launch.
@@ -391,6 +408,14 @@ impl NetworkProxyState {
             proxy_state.credential_broker = Arc::new(std::sync::RwLock::new(broker));
         }
         Ok(proxy_state)
+    }
+
+    /// A standalone policy may narrow a wildcard ceiling to an explicit local grant.
+    pub fn from_standalone_config(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+        Self {
+            standalone: true,
+            ..Self::with_reloader(state, reloader)
+        }
     }
 
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
@@ -445,7 +470,9 @@ impl NetworkProxyState {
             local_aws_signers: Arc::new(std::sync::RwLock::new(state.local_aws_signers())),
             state: Arc::new(RwLock::new(state)),
             local_binding_policy,
+            standalone: false,
             proxy_private_ips_via_upstream: false,
+            tcp_upstream_proxy: None,
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
             policy_audit_observer: None,
@@ -862,9 +889,30 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, review_set, allow_set, allow_local_binding, allowed_domains) = {
+        let host_str = host.as_str();
+        let local_literal = crate::policy::is_local_literal(host_str);
+        let (deny_set, review_set, allow_set, allow_local_binding, explicit_local_allow) = {
             let guard = self.state.read().await;
-            let allowed_domains = guard.config.allowed_domains();
+            let explicitly_allows_host =
+                |rules: &[String]| is_explicit_local_allowlisted(rules, &host);
+            // An attached executor can tighten local binding. An explicit local grant
+            // must still be permitted by the controller's fixed allowlist.
+            let standalone_subset = self.standalone
+                && allow_local_binding.is_none()
+                && guard.constraints.allowlist_expansion_enabled.is_none();
+            let explicit_local_allow = local_literal
+                && guard
+                    .config
+                    .allowed_domains()
+                    .as_deref()
+                    .is_some_and(explicitly_allows_host)
+                && (standalone_subset
+                    || guard.constraints.allowlist_expansion_enabled == Some(true)
+                    || guard
+                        .constraints
+                        .allowed_domains
+                        .as_deref()
+                        .is_none_or(explicitly_allows_host));
             (
                 guard.deny_set.clone(),
                 guard.review_set.clone(),
@@ -873,24 +921,25 @@ impl NetworkProxyState {
                 allow_local_binding
                     .unwrap_or_else(|| self.local_binding_policy.resolve(&guard.config))
                     && guard.config.allow_local_binding != Some(false),
-                allowed_domains,
+                explicit_local_allow,
             )
         };
-        let allowed_domains = allowed_domains.unwrap_or_default();
-
-        let host_str = host.as_str();
 
         // Decision order matters:
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) managed review selectors precede every ordinary allow rule
         //  4) DNS requires an allowlist match or an approval
-        if domains_match_host_or_unscoped(&deny_set, host_str) {
+        let numeric_host = crate::policy::numeric_host_address(host_str);
+        if domains_match_host_or_unscoped(&deny_set, host_str)
+            || numeric_host.is_some_and(|ip| deny_set.restricts_ip(ip))
+        {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
         let is_authorized = authorization == HostAuthorization::Approved
             || (!domains_match_host_or_unscoped(&review_set, host_str)
+                && !numeric_host.is_some_and(|ip| review_set.restricts_ip(ip))
                 && domains_match_host_or_unscoped(&allow_set, host_str));
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
@@ -901,19 +950,8 @@ impl NetworkProxyState {
             // request. Explicit local/loopback literals are allowed only when explicitly
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
-            let local_literal = {
-                let host_no_scope = unscoped_ip_literal(host_str).unwrap_or(host_str);
-                if is_loopback_host(&host) {
-                    true
-                } else if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
-                    is_non_public_ip(ip)
-                } else {
-                    false
-                }
-            };
-
             if local_literal {
-                if !is_explicit_local_allowlisted(&allowed_domains, &host) {
+                if !explicit_local_allow {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
             } else if is_authorized
@@ -1050,6 +1088,32 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.config.allow_upstream_proxy)
+    }
+
+    /// The logical host has already passed policy. Fail closed if the actual
+    /// socket needs an IP-specific denial or review the hostname did not receive.
+    pub(crate) async fn resolved_target_blocked(
+        &self,
+        host: &str,
+        ip: IpAddr,
+        authorization: HostAuthorization,
+    ) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        if guard.deny_set.restricts_ip(ip) {
+            return Ok(true);
+        }
+        if !guard.review_set.restricts_ip(ip) {
+            return Ok(false);
+        }
+        if authorization != HostAuthorization::Approved {
+            return Ok(true);
+        }
+        let host = Host::parse(host)?;
+        let host = host.as_str();
+        Ok(!domains_match_host_or_unscoped(&guard.review_set, host)
+            && crate::policy::numeric_host_address(host)
+                .is_none_or(|target| target.to_canonical() != ip.to_canonical()))
     }
 
     pub async fn allow_local_binding(&self) -> Result<bool> {
@@ -1862,7 +1926,13 @@ mod tests {
 
         assert_eq!(
             state
-                .host_blocked("api.openai.com", /*port*/ 80)
+                .host_blocked_with_lookup(
+                    "api.openai.com",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
@@ -1879,14 +1949,26 @@ mod tests {
 
         assert_eq!(
             state
-                .host_blocked("example.com", /*port*/ 80)
+                .host_blocked_with_lookup(
+                    "example.com",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
         );
         assert_eq!(
             state
-                .host_blocked("api.openai.com", /*port*/ 443)
+                .host_blocked_with_lookup(
+                    "api.openai.com",
+                    /*port*/ 443,
+                    /*allow_local_binding*/ None,
+                    HostAuthorization::RequireAllowlist,
+                    |_host, port| async move { Ok(vec![SocketAddr::from(([8, 8, 8, 8], port))]) },
+                )
                 .await
                 .unwrap(),
             HostBlockDecision::Allowed
@@ -1921,6 +2003,51 @@ mod tests {
         assert_eq!(
             state.host_blocked("localhost", /*port*/ 80).await.unwrap(),
             HostBlockDecision::Allowed
+        );
+
+        // An attached executor can disable local binding after narrowing a managed wildcard.
+        let config = NetworkProxyConfig {
+            enabled: true,
+            allow_local_binding: Some(true),
+            ..network_settings(&["localhost"], &[])
+        };
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(strings(&["**.localhost"])),
+            ..Default::default()
+        };
+        let standalone = crate::StaticNetworkProxyConfig {
+            network: NetworkProxyConfig {
+                allow_local_binding: Some(false),
+                ..config.clone()
+            },
+            constraints: constraints.clone(),
+        };
+        let standalone = NetworkProxyState::from_standalone_config(
+            standalone.build_state(crate::Platform::native()).unwrap(),
+            Arc::new(NoopReloader),
+        );
+        assert_eq!(
+            standalone
+                .host_blocked("localhost", /*port*/ 80)
+                .await
+                .unwrap(),
+            HostBlockDecision::Allowed
+        );
+        let state = NetworkProxyState::with_reloader(
+            build_config_state(config, constraints, crate::Platform::native()).unwrap(),
+            Arc::new(NoopReloader),
+        );
+        assert_eq!(
+            state
+                .host_blocked_with_local_binding(
+                    "localhost",
+                    /*port*/ 80,
+                    /*allow_local_binding*/ Some(false),
+                    HostAuthorization::RequireAllowlist,
+                )
+                .await
+                .unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal),
         );
     }
 
@@ -1984,13 +2111,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_blocked_denies_scoped_ipv6_literal_before_local_binding() {
+    async fn host_blocked_denies_equivalent_ip_literals_before_local_binding() {
         let state = network_proxy_state_for_policy(NetworkProxyConfig {
             allow_local_binding: Some(true),
-            ..network_settings(&["*"], &["fd00::1"])
+            ..network_settings(&["*"], &["fd00::1", "127.0.0.1"])
         });
 
-        for host in ["fd00::1%eth0", "[fd00::1%eth0]", "[fd00::1%25eth0]"] {
+        for host in [
+            "fd00::1%eth0",
+            "[fd00::1%eth0]",
+            "[fd00::1%25eth0]",
+            "::ffff:127.0.0.1",
+            "127.1",
+            "2130706433",
+            "0177.0.0.1",
+            "0x7f000001",
+        ] {
             assert_eq!(
                 state.host_blocked(host, /*port*/ 80).await.unwrap(),
                 HostBlockDecision::Blocked(HostBlockReason::Denied),

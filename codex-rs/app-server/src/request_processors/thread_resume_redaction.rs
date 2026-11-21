@@ -72,6 +72,7 @@ mod tests {
     fn redacts_mcp_success_result_and_removes_image_generation() {
         let mut thread = test_thread(vec![
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -82,6 +83,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"secret":"argument"}),
@@ -120,6 +122,7 @@ mod tests {
                 input_images: Vec::new(),
                 imagegen_request_id: None,
                 generation_id: None,
+                image_metadata: Default::default(),
             }),
         ]);
         thread.turns[0].items[1].started_at_ms = Some(123);
@@ -132,6 +135,7 @@ mod tests {
         assert_eq!(
             thread.turns[0].items[0].payload,
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "agent-1".to_string(),
                 text: "kept".to_string(),
                 phase: None,
@@ -145,6 +149,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Completed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
@@ -171,6 +176,7 @@ mod tests {
         let mut thread = test_thread(vec![ThreadItemPayload::McpToolCall {
             id: "mcp-1".to_string(),
             server: "docs".to_string(),
+            environment_id: None,
             tool: "lookup".to_string(),
             status: McpToolCallStatus::Failed,
             arguments: serde_json::json!({"secret":"argument"}),
@@ -193,6 +199,7 @@ mod tests {
             ThreadItemPayload::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "docs".to_string(),
+                environment_id: None,
                 tool: "lookup".to_string(),
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::String(REDACTED_PAYLOAD.to_string()),
@@ -218,6 +225,7 @@ mod tests {
             extra: None,
             session_id: "session-1".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "preview".to_string(),
             ephemeral: false,
@@ -225,6 +233,7 @@ mod tests {
             section_entered_at: None,
             project_id: None,
             daybreak_enabled: None,
+            daybreak_program_propagation_enrolled: None,
             history_mode: Default::default(),
             model_provider: "mock_provider".to_string(),
             model: None,
@@ -234,7 +243,7 @@ mod tests {
             recency_at: Some(0),
             status: ThreadStatus::Idle,
             path: None,
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
             can_accept_direct_input: None,

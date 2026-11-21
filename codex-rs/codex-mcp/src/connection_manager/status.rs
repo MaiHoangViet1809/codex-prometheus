@@ -5,9 +5,40 @@ use std::collections::HashMap;
 use codex_protocol::mcp::McpServerConnectionStatus;
 
 use super::McpConnectionSet;
+use crate::McpServerKey;
+use crate::server::McpServerConnectionIdentity;
 
 impl McpConnectionSet {
-    pub(crate) async fn connection_statuses(&self) -> HashMap<String, McpServerConnectionStatus> {
+    pub(crate) fn has_failed_startup_for_retry(&self) -> bool {
+        self.servers.values().any(|view| {
+            let client = &view.connection.client;
+            // Apps manages its own reconnects. Leave pending handshakes alone.
+            client.startup_reconnect.is_none()
+                && !client.cancel_token.is_cancelled()
+                && matches!(
+                    client.client.peek(),
+                    Some(Err(error @ super::StartupOutcomeError::Failed { .. }))
+                        if !error.is_authentication_required()
+                )
+        })
+    }
+
+    /// Reads readiness without starting deferred clients or consulting the OAuth store.
+    pub(crate) async fn has_reusable_status_catalog(&self, key: &McpServerKey) -> bool {
+        let Some(view) = self.servers.get(key) else {
+            return false;
+        };
+        let connection = &view.connection;
+        connection
+            .identity
+            .as_ref()
+            .is_some_and(McpServerConnectionIdentity::has_fixed_status_credentials)
+            && connection.client.connection_status().await == McpServerConnectionStatus::Connected
+    }
+
+    pub(crate) async fn connection_statuses(
+        &self,
+    ) -> HashMap<McpServerKey, McpServerConnectionStatus> {
         use McpServerConnectionStatus as Status;
 
         let mut statuses = self
@@ -23,7 +54,7 @@ impl McpConnectionSet {
             } else {
                 client.connection_status().await
             };
-            statuses.insert(name.clone(), status);
+            statuses.insert(name.to_owned(), status);
         }
         statuses
     }

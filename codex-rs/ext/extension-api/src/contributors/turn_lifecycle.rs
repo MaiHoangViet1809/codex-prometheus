@@ -42,6 +42,37 @@ pub struct CatalogRefreshInput<'a> {
     pub turn_store: &'a ExtensionData,
 }
 
+/// Inputs for explicit cloud discovery, including before a thread has any turns.
+#[derive(Clone, Copy)]
+pub struct CloudCatalogRefreshInput<'a> {
+    pub session_store: &'a ExtensionData,
+    pub thread_store: &'a ExtensionData,
+}
+
+impl<'a> From<CatalogRefreshInput<'a>> for CloudCatalogRefreshInput<'a> {
+    fn from(input: CatalogRefreshInput<'a>) -> Self {
+        Self {
+            session_store: input.session_store,
+            thread_store: input.thread_store,
+        }
+    }
+}
+
+/// Result of explicit discovery and its effect on the thread's MCP servers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloudCatalogRefreshOutcome {
+    pub result: Result<(), String>,
+    /// Also true when discovery failed after clearing a stale plugin catalog.
+    pub needs_mcp_refresh: bool,
+}
+
+impl CloudCatalogRefreshOutcome {
+    pub const UNCHANGED: Self = Self {
+        result: Ok(()),
+        needs_mcp_refresh: false,
+    };
+}
+
 /// Input supplied when the host completes a turn.
 pub struct TurnStopInput<'a> {
     /// Store scoped to the host session runtime.

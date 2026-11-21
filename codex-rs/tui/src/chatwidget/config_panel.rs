@@ -1,6 +1,7 @@
 //! Entry points for the configuration browser and its existing child editors.
 
 use super::ChatWidget;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::config_panel::ConfigEditor;
 use crate::config_panel::ConfigEditorHandoff;
 use crate::config_panel::ConfigPanel;
@@ -26,6 +27,23 @@ impl ChatWidget {
         resume_current_availability: crate::config_panel::ResumeCurrentAvailability,
     ) {
         match handoff.editor {
+            ConfigEditor::ModelProviders => {
+                let (view, event) = crate::app::provider::loading();
+                self.bottom_pane.show_selection_view(view);
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::Provider(event));
+            }
+            ConfigEditor::ReasoningSummary => {
+                let Some((backend, summary)) = self.config_panel_reasoning_summary else {
+                    self.config_editor_open_failed("Reasoning summary is unavailable.".into());
+                    return;
+                };
+                let keymap = self.bottom_pane.list_keymap();
+                self.bottom_pane
+                    .show_selection_view(crate::config_panel::reasoning_summary(
+                        summary, backend, &keymap,
+                    ));
+            }
             ConfigEditor::Theme => self.open_theme_picker(),
             ConfigEditor::Effects => {
                 let keymap = self.bottom_pane.list_keymap();
@@ -35,6 +53,12 @@ impl ChatWidget {
             ConfigEditor::StatusLine => self.open_status_line_setup(),
             ConfigEditor::TerminalTitle => self.open_terminal_title_setup(),
             ConfigEditor::Keyboard => self.open_keymap_picker(),
+            ConfigEditor::MouseScrollSpeed => {
+                let keymap = self.bottom_pane.list_keymap();
+                let params =
+                    crate::config_panel::mouse_scroll_speed(&self.config_panel_tui, &keymap);
+                self.bottom_pane.show_selection_view(params);
+            }
             ConfigEditor::SessionPickerLayout => {
                 let keymap = self.bottom_pane.list_keymap();
                 let params =
@@ -69,8 +93,11 @@ impl ChatWidget {
             }
         }
         if let Some(activated_at) = handoff.active_at() {
-            self.bottom_pane
-                .suppress_current_view_key_until_release(handoff.activation_key, activated_at);
+            self.suppress_current_view_key_until_release(
+                handoff.activation_key,
+                activated_at,
+                ActivationKeySuppression::ViewTransition,
+            );
         }
         self.bottom_pane.config_editor_opened();
     }
@@ -103,6 +130,7 @@ impl ChatWidget {
                 self.status_surface_overrides.status_line_use_colors = None;
             }
             ConfigToggle::AutomaticRecaps
+            | ConfigToggle::CollapseTurnDetails
             | ConfigToggle::CopyOnSelectClearSelection
             | ConfigToggle::Notifications
             | ConfigToggle::StartInVimMode
@@ -145,6 +173,7 @@ impl ChatWidget {
                     );
                 }
                 ConfigToggle::AutomaticRecaps
+                | ConfigToggle::CollapseTurnDetails
                 | ConfigToggle::CopyOnSelectClearSelection
                 | ConfigToggle::Notifications
                 | ConfigToggle::PasteDetection
@@ -193,6 +222,7 @@ impl ChatWidget {
 
     fn config_panel_status(&self) -> ConfigPanelStatus {
         ConfigPanelStatus {
+            transcript_mode: self.local_settings.transcript_mode,
             copy_on_select: self
                 .local_settings
                 .copy_on_select(&codex_terminal_detection::terminal_info()),
@@ -201,6 +231,10 @@ impl ChatWidget {
                 self.local_settings.transcript_mode,
             ),
             custom_notification_filters: self.local_settings.custom_notification_filters,
+            reasoning_summary: self
+                .config_panel_reasoning_summary
+                .map(|(_, summary)| summary)
+                .ok_or("Reconnect or update the connected server to change this setting"),
         }
     }
 

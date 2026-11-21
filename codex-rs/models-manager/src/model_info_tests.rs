@@ -3,6 +3,7 @@ use crate::ModelsManagerConfig;
 use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::AppsMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfirmationPolicies;
@@ -41,8 +42,10 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             prompted_categories: Some("Allowed: {{ categories }}".to_string()),
             rejected_categories: Some("Denied: {{ categories }}".to_string()),
         }),
+        ..Default::default()
     };
     let collaboration_modes = CollaborationModeMessages {
+        initial: Some("initial instructions".to_string()),
         default: Some("default instructions".to_string()),
         plan: Some("plan instructions".to_string()),
     };
@@ -89,6 +92,10 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         computer_use: Some("  # Native policy\r\n\n${native_markdown}\n".to_string()),
     };
     let mut messages = ModelMessages {
+        apps: Some(AppsMessages {
+            usage_instructions: Some("Catalog Apps instructions.".to_string()),
+        }),
+        plugins: None,
         content_filter_guidance: None,
         persistent_instructions: Some(persistent_instructions.to_string()),
         tools: Some(ToolMessages {
@@ -174,6 +181,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                 never: None,
                 unless_trusted: None,
                 granular: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -242,7 +250,6 @@ fn unknown_model_uses_builtin_instruction_template() {
     let model = model_info_from_slug("unknown-model");
 
     assert_eq!(render_model_instructions(&model), BASE_INSTRUCTIONS);
-    assert!(model.used_fallback_model_metadata);
 }
 
 #[test]

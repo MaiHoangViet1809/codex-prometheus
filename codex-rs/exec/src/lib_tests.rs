@@ -358,6 +358,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         extra: None,
         session_id: "thread-1".to_string(),
         forked_from_id: None,
+        attached_to_thread_id: None,
         parent_thread_id: None,
         preview: String::new(),
         ephemeral: false,
@@ -365,6 +366,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         section_entered_at: None,
         project_id: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         model: None,
@@ -374,7 +376,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         recency_at: Some(0),
         status: codex_app_server_protocol::ThreadStatus::Idle,
         path: None,
-        cwd: test_path_buf("/tmp/project").abs(),
+        cwd: test_path_buf("/tmp/project").abs().into(),
         cli_version: "0.0.0-test".to_string(),
         originator: None,
         source: codex_app_server_protocol::SessionSource::Exec,
@@ -391,6 +393,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::untimed(
                     AppServerThreadItemPayload::AgentMessage {
+                        moderation: None,
                         id: "msg-1".to_string(),
                         text: "hello".to_string(),
                         phase: None,
@@ -426,6 +429,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         turn_items_for_thread(&thread, "turn-1"),
         Some(vec![ThreadItem::untimed(
             AppServerThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-1".to_string(),
                 text: "hello".to_string(),
                 phase: None,
@@ -562,11 +566,13 @@ async fn thread_resume_params_only_include_explicit_review_policy_override() {
     let params_without_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
+        &ConfigOverrides::default(),
         /*approvals_reviewer_override*/ None,
     );
     let params_with_override = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
+        &ConfigOverrides::default(),
         Some(codex_app_server_protocol::ApprovalsReviewer::AutoReview),
     );
 
@@ -716,6 +722,7 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
+        &ConfigOverrides::default(),
         /*approvals_reviewer_override*/ None,
     );
 
@@ -752,6 +759,10 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
     let resume_params = thread_resume_params_from_config(
         &config,
         "thread-id".to_string(),
+        &ConfigOverrides {
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        },
         /*approvals_reviewer_override*/ None,
     );
 
@@ -870,6 +881,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             extra: None,
             session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -877,6 +889,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             section_entered_at: None,
             project_id: None,
             daybreak_enabled: None,
+            daybreak_program_propagation_enrolled: None,
             history_mode: Default::default(),
             model_provider: "openai".to_string(),
             model: None,
@@ -886,7 +899,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             recency_at: Some(0),
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: Some(PathBuf::from("/tmp/rollout.jsonl")),
-            cwd: test_path_buf("/tmp").abs(),
+            cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: codex_app_server_protocol::SessionSource::Cli,
             can_accept_direct_input: None,
@@ -900,7 +913,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
         model: "gpt-5.4".to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,

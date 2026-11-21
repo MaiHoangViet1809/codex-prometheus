@@ -2,6 +2,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
+use serde_with::serde_as;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -32,6 +35,7 @@ pub struct ImageGenerationInputImage {
 // Standalone image-generation item owned by the image extension. This is also
 // the field-level representation exposed by app-server; core and rollout
 // persistence only carry it inside an ExtensionItem envelope.
+#[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -61,11 +65,14 @@ pub struct ImageGenerationItem {
     #[schemars(skip)]
     #[ts(skip)]
     pub imagegen_request_id: Option<String>,
-    /// Backend generation ID for this exact image, retained only for in-process analytics.
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
+    /// Image generation identifier for the generated image, when provided by the image backend.
+    #[serde(default)]
     pub generation_id: Option<String>,
+    /// Per-image metadata selected by the backend for the receiving surface.
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    #[ts(as = "Option<_>", optional)]
+    pub image_metadata: Map<String, Value>,
 }
 
 /// Either inline generated-image data or its durable attachment-store identity.

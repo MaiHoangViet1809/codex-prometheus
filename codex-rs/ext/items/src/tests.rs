@@ -25,6 +25,7 @@ fn completed_image_generation_item() -> ExtensionItem {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     })
 }
 
@@ -43,6 +44,7 @@ fn image_generation_item_preserves_stable_wire_shape() {
             "result": "cG5n",
             "transparentBackground": null,
             "failure": null,
+            "generationId": null,
         })
     );
     assert_eq!(
@@ -74,6 +76,28 @@ fn image_generation_item_preserves_stable_wire_shape() {
     );
 }
 
+#[test]
+fn image_generation_metadata_survives_persistence() {
+    let base = serde_json::to_value(completed_image_generation_item()).expect("serialize item");
+    let mut value = base.clone();
+    value["imageMetadata"] = json!({
+        "entries": [{"name": "first", "value": 1.5}],
+        "futureKey": {"nestedKey": [null, false, 0]},
+    });
+    let item: ExtensionItem = serde_json::from_value(value.clone()).expect("read extended item");
+    assert_eq!(
+        serde_json::to_value(item).expect("persist extended item"),
+        value
+    );
+
+    for malformed in [json!({}), json!(null), json!("bad"), json!([])] {
+        value["imageMetadata"] = malformed;
+        let item: ExtensionItem =
+            serde_json::from_value(value.clone()).expect("read completed image");
+        assert_eq!(serde_json::to_value(item).expect("persist image"), base);
+    }
+}
+
 /// Transitional rollouts containing both fields must retain the durable file reference.
 #[test]
 fn image_generation_item_reads_transitional_file_wire_shape() {
@@ -90,6 +114,7 @@ fn image_generation_item_reads_transitional_file_wire_shape() {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     });
 
     assert_eq!(
@@ -126,6 +151,7 @@ fn image_generation_item_reads_transitional_file_wire_shape() {
             "fileId": "file-1",
             "transparentBackground": null,
             "failure": null,
+            "generationId": null,
         })
     );
 }
@@ -173,6 +199,7 @@ fn image_generation_item_preserves_authoritative_transparency() {
             "result": "cG5n",
             "transparentBackground": true,
             "failure": null,
+            "generationId": null,
         })
     );
     assert_eq!(
@@ -205,16 +232,19 @@ fn image_generation_request_id_stays_internal() {
     let value = serde_json::to_value(&item).expect("serialize extension item");
 
     assert!(value.get("imagegenRequestId").is_none());
-    assert!(value.get("generationId").is_none());
+    assert_eq!(value["generationId"], json!("gen-image-123"));
     let ExtensionItem::ImageGeneration(round_tripped) =
         serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item")
     else {
         panic!("expected image-generation item");
     };
     assert_eq!(round_tripped.imagegen_request_id, None);
-    assert_eq!(round_tripped.generation_id, None);
+    assert_eq!(
+        round_tripped.generation_id.as_deref(),
+        Some("gen-image-123")
+    );
     assert!(!ImageGenerationItem::inline().contains("imagegenRequestId"));
-    assert!(!ImageGenerationItem::inline().contains("generationId"));
+    assert!(ImageGenerationItem::inline().contains("generationId: string | null"));
 }
 
 #[test]

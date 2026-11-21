@@ -12,6 +12,104 @@ use tokio::net::TcpListener;
 use tokio::time::timeout;
 
 #[tokio::test]
+async fn feedback_reports_cot_removal_from_latest_completed_sampling_request() -> Result<()> {
+    use core_test_support::responses;
+
+    let server = responses::start_mock_server().await;
+    let removed =
+        json!([{"type":"reasoning", "id":"rs-1", "action":"removed", "reason":"prefix_mismatch"}]);
+    let streams = [
+        ("drop", Some(removed.clone())),
+        ("replayed", Some(removed.clone())),
+        ("tool", Some(removed.clone())),
+        ("clean", Some(json!([]))),
+        ("unreported", None),
+        ("before_compaction", Some(removed.clone())),
+        ("summary", Some(removed.clone())),
+        ("after", Some(removed)),
+    ]
+    .into_iter()
+    .map(|(id, transformations)| {
+        let mut completed = responses::ev_completed(id);
+        if let Some(transformations) = transformations {
+            completed["response"]["input_transformations"] = transformations;
+        }
+        // The tool call and clean final response belong to the same user turn.
+        let output = if id == "tool" {
+            responses::ev_function_call("call", "unknown_test_tool", "{}")
+        } else {
+            responses::ev_assistant_message(&format!("msg-{id}"), id)
+        };
+        responses::sse(vec![output, completed])
+    })
+    .collect();
+    responses::mount_sse_sequence(&server, streams).await;
+    let home = tempfile::tempdir()?;
+    app_test_support::MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    app_test_support::write_models_cache(home.path()).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(Default::default()).await?.thread;
+    for (step, expected) in [
+        ("drop", Some("true")),
+        ("replayed", Some("true")),
+        ("tool_then_clean", Some("false")),
+        ("unreported", None),
+        ("before_compaction", Some("true")),
+        ("compact", None),
+        ("after", Some("true")),
+        ("resume", None),
+    ] {
+        let mut params = json!({"threadId": thread.id});
+        let method = match step {
+            "compact" => "thread/compact/start",
+            "resume" => {
+                app.shutdown_gracefully().await?;
+                app = TestAppServer::builder()
+                    .with_codex_home(home.path())
+                    .build_initialized()
+                    .await?;
+                "thread/resume"
+            }
+            text => {
+                params["input"] = json!([{"type": "text", "text": text}]);
+                "turn/start"
+            }
+        };
+        let id = app.send_raw_request(method, Some(params)).await?;
+        app.read_response::<serde_json::Value>(id).await?;
+        if matches!(method, "turn/start" | "thread/compact/start") {
+            app.read_stream_until_notification_message("turn/completed")
+                .await?;
+        }
+
+        let destination = home.path().join(format!("{step}.zip"));
+        let id = app
+            .send_raw_request(
+                "feedback/save",
+                Some(json!({
+                    "classification": "bad_result",
+                    "threadId": thread.id,
+                    "tags": {"cot_removed": "untrusted"},
+                    "savePath": destination,
+                })),
+            )
+            .await?;
+        app.read_response::<serde_json::Value>(id).await?;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(destination)?)?;
+        let report: serde_json::Value = serde_json::from_reader(archive.by_name("report.json")?)?;
+        assert_eq!(
+            report["tags"].get("cot_removed").cloned(),
+            expected.map(serde_json::Value::from),
+            "after {step}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Result<()> {
     let proxy = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_uri = format!("http://{}", proxy.local_addr()?);
@@ -93,11 +191,13 @@ async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Res
 
 #[tokio::test]
 async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures() -> Result<()> {
+    use std::collections::HashSet;
     use std::io::Read;
     use std::sync::Arc;
 
     use app_test_support::MockResponsesConfig;
     use codex_app_server_protocol::ClientNotification;
+    use codex_protocol::ThreadId;
     use tokio::io::AsyncReadExt;
     use tokio_rustls::TlsAcceptor;
     use tokio_rustls::rustls;
@@ -190,7 +290,8 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
     MockResponsesConfig::new(&models.uri())
         .with_root_config(&format!("log_dir = {:?}", home.path().join("log")))
         .write(home.path())?;
-    let thread_id = codex_protocol::ThreadId::new();
+    let thread_id = ThreadId::new();
+    let attached_id = ThreadId::new();
     let sqlite = core_test_support::load_default_config_for_test(&home)
         .await
         .sqlite;
@@ -205,29 +306,32 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         "decision": "original denial",
         "context_omitted": false,
     });
-    for (id, record) in [
-        (thread_id, review.clone()),
-        (codex_protocol::ThreadId::new(), json!({"unrelated": true})),
+    for (id, parent, record) in [
+        (thread_id, None, Some(review.clone())),
+        (attached_id, Some(thread_id), None),
+        (ThreadId::new(), None, Some(json!({"unrelated": true}))),
     ] {
-        let rollout_path = home.path().join(format!("{id}.jsonl"));
-        std::fs::write(&rollout_path, "")?;
-        state
-            .upsert_thread(
-                &codex_state::ThreadMetadataBuilder::new(
+        let rollout_path = home
+            .path()
+            .join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
+        std::fs::write(&rollout_path, serde_json::to_vec(&id)?)?;
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            id,
+            rollout_path,
+            chrono::Utc::now(),
+            codex_protocol::protocol::SessionSource::Cli,
+        )
+        .build("mock_provider");
+        metadata.attached_thread_parent_id = parent;
+        state.upsert_thread(&metadata).await?;
+        if let Some(record) = record {
+            state
+                .record_guardian_review_failure(&codex_feedback::GuardianReviewRecord::new(
                     id,
-                    rollout_path,
-                    chrono::Utc::now(),
-                    codex_protocol::protocol::SessionSource::Cli,
-                )
-                .build("mock_provider"),
-            )
-            .await?;
-        state
-            .record_guardian_review_failure(&codex_feedback::GuardianReviewRecord::new(
-                id,
-                serde_json::to_vec(&record)?,
-            ))
-            .await?;
+                    serde_json::to_vec(&record)?,
+                ))
+                .await?;
+        }
     }
     state.close().await;
     let legacy_path = home.path().join("logs_2.sqlite");
@@ -307,6 +411,7 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         )
         .await??;
         let mut attachments = std::collections::BTreeMap::new();
+        let mut uploaded_rollouts = HashSet::<ThreadId>::new();
         while let Ok(envelope) = uploads_rx.try_recv() {
             let mut bytes = envelope.as_slice();
             // Skip the envelope header, then decode each length-delimited item.
@@ -317,7 +422,13 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
                 let header: serde_json::Value = serde_json::from_slice(&bytes[..header_end])?;
                 let length = header["length"].as_u64().unwrap() as usize;
                 bytes = &bytes[header_end + 1..];
-                if let Some(filename) = header["filename"].as_str() {
+                if header["filename"] == "rollouts.tar.gz" {
+                    let mut archive =
+                        tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..length]));
+                    for entry in archive.entries()? {
+                        uploaded_rollouts.insert(serde_json::from_reader(entry?)?);
+                    }
+                } else if let Some(filename) = header["filename"].as_str() {
                     attachments.insert(
                         filename.to_string(),
                         String::from_utf8_lossy(&bytes[..length]).into_owned(),
@@ -330,11 +441,13 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
             }
         }
         if phase == Phase::WithoutLogs {
+            assert!(uploaded_rollouts.is_empty());
             assert!(!attachments.contains_key("auto-review-failures.jsonl"));
             assert!(!attachments.contains_key("codex-logs.log"));
             assert!(!attachments.contains_key("codex-logs-legacy.log"));
             continue;
         }
+        assert_eq!(uploaded_rollouts, HashSet::from([thread_id, attached_id]));
         assert_eq!(
             attachments.get("codex-logs-legacy.log"),
             (phase == Phase::Corrupt)

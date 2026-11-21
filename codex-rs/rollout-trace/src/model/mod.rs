@@ -1,7 +1,8 @@
 //! Reduced rollout trace model.
 //!
 //! These types describe the deterministic replay output. They intentionally
-//! separate model-visible conversation from runtime/debug objects.
+//! separate model-visible conversation from runtime/debug objects. [`ToolCallId`]
+//! identifies a runtime tool invocation, including nested calls made by Code Mode.
 
 use std::collections::BTreeMap;
 
@@ -14,6 +15,7 @@ mod conversation;
 mod runtime;
 mod session;
 
+pub use codex_tool_call_id::ToolCallId;
 pub use conversation::*;
 pub use runtime::*;
 pub use session::*;
@@ -24,14 +26,10 @@ pub type AgentThreadId = String;
 pub type AgentPath = String;
 /// Runtime submission/activation UUID. This is not a chat turn.
 pub type CodexTurnId = String;
-/// Reduced transcript item ID assigned by the trace reducer.
-pub type ConversationItemId = String;
 /// Local ID for one outbound upstream inference request.
 pub type InferenceCallId = String;
 /// Globally unique ID for one concrete MCP backend request.
 pub type McpCallId = String;
-/// Reducer-owned ID for one runtime tool-call object.
-pub type ToolCallId = String;
 /// Responses `call_id` / custom-tool call ID visible in inference payloads.
 pub type ModelVisibleCallId = String;
 /// Tool invocation ID assigned inside the code-mode JavaScript runtime.
@@ -51,6 +49,35 @@ pub type EdgeId = String;
 /// Reducer-owned ID for request/log correlation metadata.
 pub type CorrelationId = String;
 
+// Ordinals identify nodes in the reduced transcript. Responses item IDs come from the wire.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConversationItemId(String);
+
+impl ConversationItemId {
+    pub(crate) fn from_ordinal(ordinal: u64) -> Self {
+        Self(format!("conversation_item:{ordinal}"))
+    }
+}
+
+impl std::fmt::Display for ConversationItemId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Whether the recorder sealed the bundle and captured all referenced payload bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingStatus {
+    /// No closing event was observed. A live or interrupted bundle can have this state.
+    Unclosed,
+    /// The event log closed cleanly with one or more intentional capture gaps.
+    ClosedWithPartialPayloads,
+    /// The log closed and every referenced payload was captured in full.
+    Complete,
+}
+
 /// Canonical reduced graph for one Codex rollout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RolloutTrace {
@@ -67,6 +94,7 @@ pub struct RolloutTrace {
     /// Wall-clock timestamp for terminal rollout status. `None` means running or partial trace.
     pub ended_at_unix_ms: Option<i64>,
     pub status: RolloutStatus,
+    pub recording_status: RecordingStatus,
     pub root_thread_id: AgentThreadId,
     pub threads: BTreeMap<AgentThreadId, AgentThread>,
     pub codex_turns: BTreeMap<CodexTurnId, CodexTurn>,
@@ -85,26 +113,26 @@ pub struct RolloutTrace {
     pub compaction_requests: BTreeMap<CompactionRequestId, CompactionRequest>,
     /// Information-flow edges between threads, cells, tools, and runtime resources.
     pub interaction_edges: BTreeMap<EdgeId, InteractionEdge>,
-    /// Raw JSON payloads keyed by raw-payload ID. Most point at files outside this object.
+    /// Index from raw payload IDs to their shard and role.
     pub raw_payloads: BTreeMap<RawPayloadId, RawPayloadRef>,
 }
 
 impl RolloutTrace {
     /// Builds an empty reduced trace that a reducer can populate.
     pub(crate) fn new(
-        schema_version: u32,
         trace_id: String,
         rollout_id: String,
         root_thread_id: AgentThreadId,
         started_at_unix_ms: i64,
     ) -> Self {
         Self {
-            schema_version,
+            schema_version: crate::bundle::REDUCED_TRACE_SCHEMA_VERSION,
             trace_id,
             rollout_id,
             started_at_unix_ms,
             ended_at_unix_ms: None,
             status: RolloutStatus::Running,
+            recording_status: RecordingStatus::Unclosed,
             root_thread_id,
             threads: BTreeMap::new(),
             codex_turns: BTreeMap::new(),

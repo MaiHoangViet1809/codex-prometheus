@@ -22,12 +22,14 @@ fn image_item(image: GeneratedImageRef) -> ImageGenerationItem {
         input_images: Vec::new(),
         imagegen_request_id: None,
         generation_id: None,
+        image_metadata: Default::default(),
     }
 }
 
 #[test]
 fn paginated_image_generation_preserves_file_reference() {
     let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         item: TurnItem::Extension(ExtensionItem::ImageGeneration(image_item(
@@ -69,6 +71,8 @@ fn legacy_image_generation_preserves_file_reference() {
         failure: None,
         saved_path: None,
         input_images: Vec::new(),
+        generation_id: None,
+        image_metadata: Default::default(),
     });
 
     let persisted = persisted_event_msg(&event, ThreadHistoryMode::Legacy)
@@ -88,6 +92,7 @@ fn legacy_image_generation_preserves_file_reference() {
 #[test]
 fn inline_image_generation_result_is_preserved() {
     let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         item: TurnItem::Extension(ExtensionItem::ImageGeneration(image_item(

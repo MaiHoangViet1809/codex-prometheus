@@ -120,11 +120,7 @@ impl LifecycleTestHandler {
     }
 }
 
-impl CoreToolRuntime for LifecycleTestHandler {
-    fn requires_guardian_review(&self, _invocation: &ToolInvocation) -> bool {
-        self.tool_name.name == "reviewed_tool"
-    }
-}
+impl CoreToolRuntime for LifecycleTestHandler {}
 
 impl codex_extension_api::ApprovalReviewContributor for LifecycleTestHandler {
     fn decide<'a>(
@@ -617,7 +613,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
     expected_token_limit: usize,
 ) {
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -631,6 +627,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                 },
                 tool_input: serde_json::json!({}),
                 result_metadata_capture_allowed: false,
+                result_capture: Default::default(),
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
                 truncation_policy,
@@ -644,7 +641,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
     };
 
     assert_eq!(
-        result.into_response(),
+        result.into_response(/*file_backed_tool_audio*/ false),
         ResponseItemEnvelope {
             item: ResponseItem::from(ResponseInputItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -658,10 +655,50 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
     );
 }
 
+#[test_case::test_case(true; "file-backed audio enabled")]
+#[test_case::test_case(false; "file-backed audio disabled")]
+fn mcp_audio_producer_limit_is_transient_until_history_admission(file_backed_tool_audio: bool) {
+    let result = AnyToolResult {
+        call_id: "clip".into(),
+        payload: ToolPayload::Function {
+            arguments: "{}".into(),
+        },
+        result: Box::new(crate::tools::context::McpToolOutput {
+            result: codex_protocol::mcp::CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "audio",
+                    "mimeType": "audio/wav",
+                    "data": "UklGRiYAAABXQVZFZm10IBAAAAABAAEAwF0AAIC7AAACABAAZGF0YQIAAAAAAA==",
+                })],
+                structured_content: None,
+                is_error: None,
+                meta: None,
+            },
+            tool_input: serde_json::json!({}),
+            result_metadata_capture_allowed: false,
+            result_capture: Default::default(),
+            wall_time: Duration::ZERO,
+            original_image_detail_supported: false,
+            truncation_policy: TruncationPolicy::Tokens(100),
+        }),
+        post_tool_use_payload: None,
+    };
+
+    let metadata = result
+        .into_response(file_backed_tool_audio)
+        .metadata
+        .unwrap();
+    assert_eq!(metadata.producer_bounded_tool_audio, file_backed_tool_audio);
+    assert!(!metadata.tool_audio_budget_applied);
+    let serialized = serde_json::to_value(&metadata).unwrap();
+    assert!(serialized.get("producer_bounded_tool_audio").is_none());
+    assert!(serialized.get("tool_audio_budget_applied").is_none());
+}
+
 #[test]
 fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -678,7 +715,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     };
 
     assert_eq!(
-        result.into_response(),
+        result.into_response(/*file_backed_tool_audio*/ false),
         ResponseItemEnvelope::new(
             ResponseInputItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -691,7 +728,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
     );
 
     let result = AnyToolResult {
-        call_id: "call-1".to_string(),
+        call_id: "call-1".into(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
@@ -733,6 +770,7 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
             },
             tool_input: serde_json::json!({ "query": "rewritten query" }),
             result_metadata_capture_allowed: true,
+            result_capture: Default::default(),
             wall_time: std::time::Duration::ZERO,
             original_image_detail_supported: false,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(64),
@@ -746,7 +784,10 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
         arguments: "{}".to_string(),
     };
     let original_result = result.original.code_mode_result(&payload);
-    assert_eq!(result.tool_result_metadata(), Some(&metadata));
+    assert_eq!(
+        result.tool_result_metadata(),
+        ToolResultMetadata::new(&metadata)
+    );
     assert_eq!(result.code_mode_result(&payload), original_result);
 }
 
@@ -778,7 +819,12 @@ async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyh
     });
     builder.approval_review_contributor(reviewed_handler.clone());
     session.services.extensions = Arc::new(builder.build());
-    let registry = ToolRegistry::from_tools([ok_handler, failing_handler, reviewed_handler]);
+    let mut registry = ToolRegistry::from_tools([ok_handler, failing_handler]);
+    registry.register_trusted_with_native_review(
+        reviewed_handler,
+        super::ToolExposure::Direct,
+        super::NativeReview::Required,
+    );
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
@@ -876,9 +922,10 @@ fn test_invocation(
         tracker: Arc::new(tokio::sync::Mutex::new(
             crate::turn_diff_tracker::TurnDiffTracker::new(),
         )),
-        call_id: call_id.to_string(),
+        call_id: call_id.into(),
         tool_name,
         source: crate::tools::context::ToolCallSource::Direct,
+        native_call: None,
         environments: Default::default(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),

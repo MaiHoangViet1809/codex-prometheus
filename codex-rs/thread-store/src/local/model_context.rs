@@ -4,7 +4,6 @@ use std::io;
 use std::path::Path;
 
 use codex_protocol::protocol::HistoryPosition;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
@@ -78,7 +77,17 @@ pub(super) async fn load_from_rollout_path(
         let lineage = store
             .resolve_rollout_lineage(thread_id, Some(path.to_path_buf()))
             .await?;
-        scan_model_context_from_lineage(lineage, session_meta).await?
+        let (mut items, tools) = lineage
+            .read_with_fallback(store, |lineage| {
+                scan_model_context_from_lineage(lineage, thread_id)
+            })
+            .await?;
+        let mut session_meta = session_meta;
+        if let Some(tools) = tools {
+            session_meta.meta.dynamic_tools = Some(tools);
+        }
+        items.insert(0, RolloutItem::SessionMeta(Box::new(session_meta)));
+        items
     } else {
         read_thread::load_history_items(path).await?
     };
@@ -118,10 +127,9 @@ pub(super) async fn load_for_fork(
         let (stop, keep_running) = tokio::sync::oneshot::channel::<()>();
         session_meta.meta.multi_agent_version = tokio::task::spawn_blocking(move || {
             for segment in source_lineage.segments().iter().rev() {
-                let file = codex_rollout::open_rollout_seekable_reader(
-                    segment.rollout_path.as_path(),
-                    || stop.is_closed(),
-                )?;
+                let file = source_lineage
+                    .reads
+                    .open(&segment.rollout_path, || stop.is_closed())?;
                 let mut scanner = match segment.end.map(|end| end.end_byte_offset) {
                     Some(end_byte_offset) => ReverseJsonlScanner::new_at(file, end_byte_offset)?,
                     None => ReverseJsonlScanner::new(file)?,
@@ -150,22 +158,32 @@ pub(super) async fn load_for_fork(
         })?;
         drop(keep_running);
     }
-    match history_base {
+    let mut items = match history_base {
         Some(history_base) => {
             let lineage = lineage.truncate_at(history_base).await?;
-            scan_model_context_from_lineage(lineage, session_meta).await
+            let (items, tools) =
+                scan_model_context_from_lineage(lineage, session_meta.meta.id).await?;
+            if let Some(tools) = tools {
+                session_meta.meta.dynamic_tools = Some(tools);
+            }
+            items
         }
-        None => Ok(vec![RolloutItem::SessionMeta(Box::new(session_meta))]),
-    }
+        None => Vec::new(),
+    };
+    items.insert(0, RolloutItem::SessionMeta(Box::new(session_meta)));
+    Ok(items)
 }
 
 async fn scan_model_context_from_lineage(
     lineage: RolloutLineage,
-    session_meta: SessionMetaLine,
-) -> ThreadStoreResult<Vec<RolloutItem>> {
+    owner: codex_protocol::ThreadId,
+) -> ThreadStoreResult<(
+    Vec<RolloutItem>,
+    Option<Vec<codex_protocol::dynamic_tools::DynamicToolSpec>>,
+)> {
     let (stop, keep_running) = tokio::sync::oneshot::channel::<()>();
     let scan = tokio::task::spawn_blocking(move || {
-        scan_model_context_from_lineage_blocking(&lineage, session_meta, || stop.is_closed())
+        scan_model_context_from_lineage_blocking(&lineage, owner, || stop.is_closed())
     })
     .await
     .map_err(|err| ThreadStoreError::Internal {
@@ -182,17 +200,17 @@ async fn scan_model_context_from_lineage(
 
 fn scan_model_context_from_lineage_blocking(
     lineage: &RolloutLineage,
-    mut session_meta: SessionMetaLine,
+    owner: codex_protocol::ThreadId,
     is_cancelled: impl Fn() -> bool,
-) -> io::Result<Vec<RolloutItem>> {
+) -> io::Result<(
+    Vec<RolloutItem>,
+    Option<Vec<codex_protocol::dynamic_tools::DynamicToolSpec>>,
+)> {
     let mut scan = ModelContextScan::default();
     let mut context_complete = false;
     let mut applied_dynamic_tools = None;
     'segments: for segment in lineage.segments().iter().rev() {
-        let file = codex_rollout::open_rollout_seekable_reader(
-            segment.rollout_path.as_path(),
-            &is_cancelled,
-        )?;
+        let file = lineage.reads.open(&segment.rollout_path, &is_cancelled)?;
         let mut scanner = match segment.end.map(|end| end.end_byte_offset) {
             Some(end_byte_offset) => ReverseJsonlScanner::new_at(file, end_byte_offset)?,
             None => ReverseJsonlScanner::new(file)?,
@@ -206,13 +224,26 @@ fn scan_model_context_from_lineage_blocking(
             if matches!(&line.item, RolloutItem::SessionMeta(_)) {
                 break;
             }
-            if applied_dynamic_tools.is_none()
-                && let RolloutItem::EventMsg(
-                    codex_protocol::protocol::EventMsg::ThreadSettingsApplied(event),
-                ) = &line.item
-                && event.thread_id == Some(session_meta.meta.id)
-            {
-                applied_dynamic_tools = event.thread_settings.dynamic_tools.clone();
+            if applied_dynamic_tools.is_none() {
+                applied_dynamic_tools = match &line.item {
+                    RolloutItem::DynamicToolsUpdated { thread_id, tools }
+                        if *thread_id == owner =>
+                    {
+                        Some(tools.clone())
+                    }
+                    RolloutItem::Compacted(item) => item
+                        .resume_metadata
+                        .as_ref()
+                        .and_then(|meta| meta.dynamic_tools.as_ref())
+                        .filter(|snapshot| snapshot.thread_id == owner)
+                        .map(|snapshot| snapshot.tools.clone()),
+                    RolloutItem::EventMsg(
+                        codex_protocol::protocol::EventMsg::ThreadSettingsApplied(event),
+                    ) if event.thread_id == Some(owner) => {
+                        event.thread_settings.dynamic_tools.clone()
+                    }
+                    _ => None,
+                };
             }
             if !context_complete {
                 context_complete =
@@ -226,10 +257,5 @@ fn scan_model_context_from_lineage_blocking(
         }
     }
 
-    let mut items = scan.finish();
-    if let Some(tools) = applied_dynamic_tools {
-        session_meta.meta.dynamic_tools = Some(tools);
-    }
-    items.insert(0, RolloutItem::SessionMeta(Box::new(session_meta)));
-    Ok(items)
+    Ok((scan.finish(), applied_dynamic_tools))
 }

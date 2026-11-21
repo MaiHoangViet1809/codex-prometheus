@@ -21,24 +21,15 @@ pub(crate) async fn review(invocation: &ToolInvocation) -> Result<(), FunctionCa
         ));
     };
     let mut item = invocation
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .rev()
-        .find(|item| {
-            matches!(
-                item,
-                ResponseItem::FunctionCall { call_id, .. } if call_id == &invocation.call_id
-            )
-        })
+        .native_call
+        .as_deref()
         .cloned()
         .unwrap_or_else(|| ResponseItem::FunctionCall {
             id: None,
             name: invocation.tool_name.name.clone(),
             namespace: invocation.tool_name.namespace.clone(),
             arguments: arguments.clone(),
-            call_id: invocation.call_id.clone(),
+            call_id: invocation.call_id.to_string(),
             encrypted_content: None,
             status: None,
             encrypted_function_args: matches!(
@@ -70,7 +61,7 @@ pub(crate) async fn review(invocation: &ToolInvocation) -> Result<(), FunctionCa
         context,
         new_guardian_review_id(),
         GuardianApprovalRequest::NativeToolCall {
-            id: invocation.call_id.clone(),
+            id: invocation.call_id.to_string(),
             call: Box::new(item),
         },
         ApprovalRequestReasons::default(),

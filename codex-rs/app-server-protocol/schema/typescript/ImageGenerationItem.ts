@@ -4,9 +4,18 @@
 import type { AbsolutePathBuf } from "./AbsolutePathBuf";
 import type { ImageGenerationFailure } from "./ImageGenerationFailure";
 import type { ImageGenerationInputImage } from "./ImageGenerationInputImage";
+import type { JsonValue } from "./serde_json/JsonValue";
 
 export type ImageGenerationItem = { id: string, status: string, revisedPrompt: string | null, transparentBackground?: boolean, failure: ImageGenerationFailure | null, savedPath?: AbsolutePathBuf,
 /**
  * Observed local inputs for a completed generation, absent on older items.
  */
-inputImages?: Array<ImageGenerationInputImage>, } & ({ fileId: string, } | { result: string, });
+inputImages?: Array<ImageGenerationInputImage>,
+/**
+ * Image generation identifier for the generated image, when provided by the image backend.
+ */
+generationId: string | null,
+/**
+ * Per-image metadata selected by the backend for the receiving surface.
+ */
+imageMetadata?: { [key in string]?: JsonValue }, } & ({ fileId: string, } | { result: string, });

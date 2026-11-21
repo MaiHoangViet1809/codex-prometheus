@@ -7,11 +7,15 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
+use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::Turn;
@@ -23,18 +27,23 @@ use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[path = "web_search_routing.rs"]
+mod routing;
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -76,10 +85,175 @@ enum WebSearchProvider {
     CustomResponses,
 }
 
+#[test_case(
+    r#"web_search = "cached""#, /*indexed_default*/ false, "",
+    [json!(false), json!(false), json!(true)]; "explicit_cached"
+)]
+#[test_case(
+    "", /*indexed_default*/ true, "",
+    [json!("indexed"), json!("indexed"), json!(true)]; "implicit_indexed"
+)]
+#[test_case(
+    r#"web_search = "indexed""#, /*indexed_default*/ true, "",
+    [json!("indexed"), json!("indexed"), json!("indexed")]; "explicit_indexed"
+)]
+#[test_case(
+    "", /*indexed_default*/ true, r#"allowed_web_search_modes = ["cached", "indexed"]"#,
+    [json!("indexed"), json!("indexed"), json!("indexed")]; "implicit_indexed_without_live"
+)]
+#[tokio::test]
+async fn standalone_web_search_uses_new_permissions_only_on_the_next_turn(
+    root_config: &str,
+    indexed_default: bool,
+    requirements: &str,
+    expected: [Value; 3],
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let search_path = "/v1/alpha/search";
+    mount_search_response(&server, search_path, /*expected_calls*/ 3).await;
+    let search = |id| {
+        responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                id,
+                "web",
+                "run",
+                r#"{"search_query":[{"q":"weather"}]}"#,
+            ),
+            responses::ev_completed(id),
+        ])
+    };
+    responses::mount_sse_sequence(
+        &server,
+        vec![
+            search("before-update"),
+            responses::sse(vec![
+                responses::ev_function_call(
+                    "pause",
+                    "request_user_input",
+                    &json!({
+                        "questions": [{
+                            "id": "continue", "header": "Continue", "question": "Search again?",
+                            "options": [
+                                {"label": "Yes", "description": "Search again"},
+                                {"label": "No", "description": "Finish"}
+                            ]
+                        }]
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("paused"),
+            ]),
+            search("after-update"),
+            responses::sse_completed("first-turn-done"),
+            search("next-turn"),
+            responses::sse_completed("second-turn-done"),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = MockResponsesConfig::new(&server.uri())
+        .with_root_config(root_config)
+        .enable_feature(Feature::StandaloneWebSearch)
+        .enable_feature(Feature::DefaultModeRequestUserInput)
+        .with_provider_config("supports_websockets = false")
+        .with_provider_config("supports_standalone_web_search = true");
+    if indexed_default {
+        config = config.enable_feature(Feature::WebSearchIndexedDefault);
+    }
+    config.write(codex_home.path())?;
+    if !requirements.is_empty() {
+        std::fs::write(codex_home.path().join("requirements.toml"), requirements)?;
+    }
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread_id = app
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread
+        .id;
+    let turn = TurnStartParams {
+        thread_id: thread_id.clone(),
+        input: vec![V2UserInput::Text {
+            text: "Search the web".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let start = app.send_turn_start_request(turn.clone()).await?;
+    let _: TurnStartResponse = app.read_response(start).await?;
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_request_message(),
+    )
+    .await??
+    else {
+        anyhow::bail!("expected the first turn to pause for input");
+    };
+    let _: ThreadSettingsUpdateResponse = app
+        .request(|request_id| ClientRequest::ThreadSettingsUpdate {
+            request_id,
+            params: ThreadSettingsUpdateParams {
+                thread_id,
+                permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
+                ..Default::default()
+            },
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_matching_notification(
+            "thread settings updated to Full Access",
+            |notification| {
+                notification.method == "thread/settings/updated"
+                    && notification
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.pointer("/threadSettings/sandboxPolicy/type"))
+                        .and_then(Value::as_str)
+                        == Some("dangerFullAccess")
+            },
+        ),
+    )
+    .await??;
+    app.send_response(
+        request_id,
+        json!({"answers":{"continue":{"answers":["Yes"]}}}),
+    )
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.start_turn_and_wait_for_completion(turn),
+    )
+    .await??;
+
+    let mut observed = Vec::new();
+    for request in server
+        .received_requests()
+        .await
+        .context("expected HTTP requests")?
+    {
+        if request.url.path() == search_path {
+            let body = request.body_json::<Value>()?;
+            observed.push(body["settings"]["external_web_access"].clone());
+        }
+    }
+    assert_eq!(observed, expected);
+    Ok(())
+}
+
 async fn assert_standalone_web_search_round_trips_output(
     provider: WebSearchProvider,
     literature_search: bool,
 ) -> Result<()> {
+    let indexed_by_default = matches!(provider, WebSearchProvider::ChatGpt);
     let call_id = "web-run-1";
     let (model, query, commands) = if literature_search {
         (
@@ -111,7 +285,7 @@ async fn assert_standalone_web_search_round_trips_output(
         WebSearchProvider::ChatGpt => "/api/codex/alpha/search",
         WebSearchProvider::CustomResponses => "/v1/alpha/search",
     };
-    mount_search_response(&server, search_path).await;
+    mount_search_response(&server, search_path, /*expected_calls*/ 1).await;
 
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -193,12 +367,17 @@ async fn assert_standalone_web_search_round_trips_output(
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&env_overrides)
+        .without_managed_config()
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
 
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             service_name: Some("chatgpt_cca".to_string()),
+            config: Some(HashMap::from([(
+                "features.web_search_indexed_default".to_string(),
+                json!(indexed_by_default),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -302,6 +481,14 @@ async fn assert_standalone_web_search_round_trips_output(
         json!(["direct"])
     );
     assert_eq!(
+        search_body["settings"]["external_web_access"],
+        if indexed_by_default {
+            json!("indexed")
+        } else {
+            json!(false)
+        }
+    );
+    assert_eq!(
         search_body["input"]
             .as_array()
             .context("search input should be an array")?
@@ -383,6 +570,7 @@ async fn assert_standalone_web_search_round_trips_output(
     let mut reloaded_mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&env_overrides)
+        .without_managed_config()
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
     let read_req = reloaded_mcp
@@ -424,7 +612,7 @@ async fn wait_for_web_search_completed(
     }
 }
 
-async fn mount_search_response(server: &MockServer, search_path: &str) {
+async fn mount_search_response(server: &MockServer, search_path: &str, expected_calls: u64) {
     Mock::given(method("POST"))
         .and(path(search_path))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -439,7 +627,7 @@ async fn mount_search_response(server: &MockServer, search_path: &str) {
                 "future_field": {"preserved": true},
             }],
         })))
-        .expect(1)
+        .expect(expected_calls)
         .mount(server)
         .await;
 }

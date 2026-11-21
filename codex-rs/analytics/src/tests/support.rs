@@ -64,6 +64,7 @@ pub(super) const TEST_PRODUCT_CLIENT_ID: &str = "codex_work_desktop";
 
 pub(super) struct TestTurnMetadata {
     pub(super) root_turn_id: Mutex<Option<String>>,
+    pub(super) turn_trigger: Option<String>,
 }
 
 impl TurnAnalyticsMetadata for TestTurnMetadata {
@@ -72,7 +73,7 @@ impl TurnAnalyticsMetadata for TestTurnMetadata {
     }
 
     fn turn_trigger(&self) -> Option<String> {
-        None
+        self.turn_trigger.clone()
     }
 
     fn codex_turn_source(&self) -> Option<String> {
@@ -83,6 +84,7 @@ impl TurnAnalyticsMetadata for TestTurnMetadata {
 pub(super) fn test_turn_metadata(root_turn_id: Option<&str>) -> Arc<TestTurnMetadata> {
     Arc::new(TestTurnMetadata {
         root_turn_id: Mutex::new(root_turn_id.map(str::to_string)),
+        turn_trigger: None,
     })
 }
 
@@ -110,6 +112,7 @@ pub(super) fn sample_thread_with_metadata(
         extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
+        attached_to_thread_id: None,
         parent_thread_id,
         preview: "first prompt".to_string(),
         ephemeral,
@@ -117,6 +120,7 @@ pub(super) fn sample_thread_with_metadata(
         section_entered_at: None,
         project_id: None,
         daybreak_enabled: None,
+        daybreak_program_propagation_enrolled: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         model: None,
@@ -126,7 +130,7 @@ pub(super) fn sample_thread_with_metadata(
         recency_at: Some(2),
         status: AppServerThreadStatus::Idle,
         path: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         cli_version: "0.0.0".to_string(),
         source,
         can_accept_direct_input: None,
@@ -157,7 +161,7 @@ pub(super) fn sample_thread_start_response(
         model: model.to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,
@@ -213,6 +217,7 @@ pub(super) fn sample_thread_resume_response_with_source(
 ) -> ClientResponsePayload {
     ClientResponsePayload::ThreadResume(ThreadResumeResponse {
         context_budget: None,
+        dynamic_tools_digest: String::new(),
         disabled_plugin_ids: Vec::new(),
         thread: sample_thread_with_metadata(
             thread_id,
@@ -224,7 +229,7 @@ pub(super) fn sample_thread_resume_response_with_source(
         model: model.to_string(),
         model_provider: "openai".to_string(),
         service_tier: None,
-        cwd: test_path_buf("/tmp").abs(),
+        cwd: test_path_buf("/tmp").abs().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnRequest,
@@ -594,6 +599,7 @@ pub(super) fn sample_initialize_fact(connection_id: u64) -> AnalyticsFact {
                 version: "1.0.0".to_string(),
             },
             capabilities: Some(InitializeCapabilities {
+                required_human_approval: false,
                 explicit_gateway_oauth: false,
                 experimental_api: false,
                 request_attestation: false,

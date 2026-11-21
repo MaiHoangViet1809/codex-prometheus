@@ -10,7 +10,9 @@ pub(crate) use render::EFFECTS_VIEW_ID;
 pub(crate) use render::copy_on_select;
 pub(crate) use render::effects;
 pub(crate) use render::effects_with_toggle_states;
+pub(crate) use render::mouse_scroll_speed;
 pub(crate) use render::notification_condition;
+pub(crate) use render::reasoning_summary;
 pub(crate) use render::resume_directory;
 pub(crate) use render::right_click_paste;
 pub(crate) use render::session_picker_layout;
@@ -30,6 +32,7 @@ use codex_config::types::NotificationCondition;
 use codex_config::types::Notifications;
 use codex_config::types::RightClickPaste;
 use codex_config::types::Tui;
+use codex_protocol::config_types::ReasoningSummary;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -58,6 +61,9 @@ pub(crate) enum ConfigEditor {
     StatusLine,
     TerminalTitle,
     Keyboard,
+    ModelProviders,
+    ReasoningSummary,
+    MouseScrollSpeed,
     SessionPickerLayout,
     ResumeDirectory,
     CopyOnSelect,
@@ -71,12 +77,24 @@ pub(crate) enum ResumeCurrentAvailability {
     RequiresCwdOverride,
 }
 
+fn reasoning_summary_label(summary: Option<ReasoningSummary>) -> &'static str {
+    match summary {
+        None => "Auto (default)",
+        Some(ReasoningSummary::Auto) => "Auto",
+        Some(ReasoningSummary::Concise) => "Concise",
+        Some(ReasoningSummary::Detailed) => "Detailed",
+        Some(ReasoningSummary::None) => "None",
+    }
+}
+
 /// Effective state the panel cannot derive from the `Tui` preferences alone.
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigPanelStatus {
+    pub(crate) transcript_mode: crate::transcript_mode::TranscriptMode,
     pub(crate) copy_on_select: bool,
     pub(crate) right_click_paste: Result<bool, &'static str>,
     pub(crate) custom_notification_filters: bool,
+    pub(crate) reasoning_summary: Result<Option<ReasoningSummary>, &'static str>,
 }
 
 /// State shared by the panel that queued an editor and the event that will open it.
@@ -138,7 +156,13 @@ impl ConfigEditorHandoff {
 impl ConfigEditor {
     fn value(self, tui: &Tui, status: ConfigPanelStatus) -> ConfigSettingValue {
         let label = match self {
+            Self::ModelProviders => "Choose".to_string(),
+            Self::ReasoningSummary => match status.reasoning_summary {
+                Ok(summary) => reasoning_summary_label(summary).into(),
+                Err(reason) => return ConfigSettingValue::Unavailable { reason },
+            },
             Self::Theme => tui.theme.clone().unwrap_or_else(|| "Automatic".to_string()),
+            Self::MouseScrollSpeed => format!("{}×", tui.mouse_scroll_speed.unwrap_or(1.0)),
             Self::SessionPickerLayout => match tui.session_picker_view.unwrap_or_default() {
                 codex_config::types::SessionPickerViewMode::Comfortable => "Comfortable",
                 codex_config::types::SessionPickerViewMode::Dense => "Dense",
@@ -271,7 +295,7 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
         tui.notification_settings.notifications,
         Notifications::Enabled(false)
     );
-    vec![
+    let mut settings = vec![
         ConfigSetting {
             section: ConfigSection::Appearance,
             label: "Theme",
@@ -384,6 +408,13 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             },
         },
         ConfigSetting {
+            section: ConfigSection::Input,
+            label: "Mouse scroll speed",
+            description: "Adjust how far the fullscreen transcript scrolls with the mouse wheel",
+            keywords: "wheel scrolling speed multiplier trackpad",
+            value: ConfigEditor::MouseScrollSpeed.value(tui, status),
+        },
+        ConfigSetting {
             section: ConfigSection::Sessions,
             label: "Automatic recaps",
             description: "Prepare recaps while the terminal is unfocused",
@@ -406,6 +437,20 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             description: "Choose which working directory to use when the current directory and saved session differ",
             keywords: "cwd folder path fork ask",
             value: ConfigEditor::ResumeDirectory.value(tui, status),
+        },
+        ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Model providers",
+            description: "Choose the default provider for new chats on the connected server",
+            keywords: "provider gateway endpoint model default",
+            value: ConfigEditor::ModelProviders.value(tui, status),
+        },
+        ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Reasoning summary",
+            description: "Choose the reasoning summary style for new chats on the connected server",
+            keywords: "model thinking concise detailed none auto",
+            value: ConfigEditor::ReasoningSummary.value(tui, status),
         },
         ConfigSetting {
             section: ConfigSection::TextSelection,
@@ -436,7 +481,20 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             keywords: "clipboard mouse paste automatic",
             value: ConfigEditor::RightClickPaste.value(tui, status),
         },
-    ]
+    ];
+    if status.transcript_mode.is_owned() {
+        settings.push(ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Collapse turn details",
+            description: "Summarize tool calls in the conversation",
+            keywords: "collapse_turn_details fullscreen transcript expand history",
+            value: ConfigSettingValue::Toggle {
+                setting: ConfigToggle::CollapseTurnDetails,
+                enabled: ConfigToggle::CollapseTurnDetails.enabled(tui),
+            },
+        });
+    }
+    settings
 }
 
 pub(crate) struct ConfigPanel {

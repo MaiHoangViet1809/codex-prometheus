@@ -25,7 +25,7 @@ struct Cli {
     )]
     codex_ui_plugin_process: bool,
 
-    /// Transport endpoint: `stdio`, `stdio://`, `grpc+stdio://`, or `grpc://IP:PORT`.
+    /// gRPC endpoint: `grpc+stdio://` (aliases `stdio` and `stdio://`) or `grpc://IP:PORT`.
     #[arg(
         long,
         value_name = "URL",
@@ -103,7 +103,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {
-    OtelProvider::try_new(&OtelSettings {
+    OtelProvider::try_new_http_traces(&OtelSettings {
+        headers_helper: None,
         http_client_factory: codex_http_client::HttpClientFactory::new(
             codex_http_client::OutboundProxyPolicy::ReqwestDefault,
         ),
@@ -120,7 +121,7 @@ fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::new(),
+        span_attributes: HashMap::new(),
         tracestate: BTreeMap::new(),
     })
     .map_err(|error| anyhow::anyhow!("failed to build code-mode host OTEL provider: {error}"))?
